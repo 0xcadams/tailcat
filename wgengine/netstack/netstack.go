@@ -604,13 +604,7 @@ type LocalBackend = any
 // Start sets up all the handlers so netstack can start working. Implements
 // wgengine.FakeImpl.
 func (ns *Impl) Start(b LocalBackend) error {
-	if b == nil {
-		panic("nil LocalBackend interface")
-	}
 	lb := b.(*ipnlocal.LocalBackend)
-	if lb == nil {
-		panic("nil LocalBackend")
-	}
 	ns.lb = lb
 	tcpFwd := tcp.NewForwarder(ns.ipstack, tcpRXBufDefSize, maxInFlightConnectionAttempts(), ns.acceptTCP)
 	udpFwd := udp.NewForwarder(ns.ipstack, ns.acceptUDPNoICMP)
