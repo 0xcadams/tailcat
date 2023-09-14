@@ -1114,6 +1114,41 @@ func (c *Conn) LastRecvActivityOfNodeKey(nk key.NodePublic) string {
 	return mono.Since(saw).Round(time.Second).String()
 }
 
+func (c *Conn) DerpCatPing(dst key.NodePublic, res *ipnstate.PingResult, cb func(*ipnstate.PingResult)) {
+	// c.mu.Lock()
+	// defer c.mu.Unlock()
+	// if c.privateKey.IsZero() {
+	// 	res.Err = "local tailscaled stopped"
+	// 	cb(res)
+	// 	return
+	// }
+	// ep, ok := c.peerMap.endpointForNodeKey(dst)
+	// if !ok {
+	// 	res.Err = fmt.Sprintf("unknown peer %v; peerMap size is %v", dst, c.peerMap.nodeCount())
+	// 	cb(res)
+	// 	return
+	// }
+	// _ = ep
+
+	msg := &disco.Ping{
+		Meow:    true,
+		NodeKey: c.privateKey.Public(),
+		TxID:    stun.NewTxID(),
+	}
+	sent, err := c.SendDerpCatDisco(dst, msg)
+	if err != nil {
+		res.Err = err.Error()
+		cb(res)
+		return
+	}
+	if !sent {
+		res.Err = "no error but not sent wut"
+		cb(res)
+		return
+	}
+	cb(res)
+}
+
 // Ping handles a "tailscale ping" CLI query.
 func (c *Conn) Ping(peer tailcfg.NodeView, res *ipnstate.PingResult, size int, cb func(*ipnstate.PingResult)) {
 	c.mu.Lock()
@@ -1887,6 +1922,30 @@ func (c *Conn) sendDiscoAllocateUDPRelayEndpointRequest(dst epAddr, dstKey key.N
 		return true, nil
 	}
 	return c.sendDiscoMessage(dst, dstKey, dstDisco, allocReq, logLevel)
+}
+
+func (c *Conn) SendDerpCatDisco(dstKey key.NodePublic, m disco.Message) (sent bool, err error) {
+	dstAddr := netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, 1)
+
+	pubBytes := dstKey.AppendTo(nil)
+	dstDisco := key.DiscoPublicFromRaw32(mem.B(pubBytes)) // TODO(bradfitz): this is sketch, mixing keys
+
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return false, errConnClosed
+	}
+	pkt := make([]byte, 0, 512) // TODO: size it correctly? pool? if it matters.
+	pkt = append(pkt, disco.Magic...)
+	pkt = c.discoPublic.AppendTo(pkt)
+	di := c.discoInfoLocked(dstDisco)
+	c.mu.Unlock()
+
+	box := di.sharedKey.Seal(m.AppendMarshal(nil))
+	pkt = append(pkt, box...)
+	sent, err = c.sendAddr(dstAddr, dstKey, pkt)
+	c.logf("SendDerpCatDisco: sent=%v, err=%v", sent, err)
+	return sent, err
 }
 
 // sendDiscoMessage sends discovery message m to dstDisco at dst.
