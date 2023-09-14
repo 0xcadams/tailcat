@@ -168,6 +168,9 @@ type Conn struct {
 	health                 *health.Tracker      // or nil
 	controlKnobs           *controlknobs.Knobs  // or nil
 
+	derpCatServerMode bool
+	onMeow            func(key.NodePublic, key.DiscoPublic)
+
 	// ================================================================
 	// No locking required to access these fields, either because
 	// they're static after construction, or are wholly owned by a
@@ -561,7 +564,7 @@ func newConn(logf logger.Logf) *Conn {
 		discoInfo:    make(map[key.DiscoPublic]*discoInfo),
 		cloudInfo:    cloudinfo.New(logf),
 	}
-	c.discoAtomic.Set(discoPrivate)
+	c.SetDisco(discoPrivate)
 	c.bind = &connBind{Conn: c, closed: true}
 	c.receiveBatchPool = sync.Pool{New: func() any {
 		msgs := make([]ipv6.Message, c.bind.BatchSize())
@@ -608,6 +611,15 @@ func (c *Conn) onUDPRelayAllocResp(allocResp UDPRelayAllocResp) {
 	if derpAddr.IsValid() {
 		go c.sendDiscoMessage(epAddr{ap: derpAddr}, ep.publicKey, disco.key, allocResp.Message, discoVerboseLog)
 	}
+}
+
+func (c *Conn) SetDisco(priv key.DiscoPrivate) {
+	c.discoAtomic.Set(priv)
+}
+
+func (c *Conn) BeDerpCatServer(onMeow func(key.NodePublic, key.DiscoPublic)) {
+	c.derpCatServerMode = true
+	c.onMeow = onMeow
 }
 
 // NewConn creates a magic Conn listening on opts.Port.
@@ -1943,7 +1955,8 @@ func (c *Conn) SendDerpCatDisco(dstKey key.NodePublic, m disco.Message) (sent bo
 
 	box := di.sharedKey.Seal(m.AppendMarshal(nil))
 	pkt = append(pkt, box...)
-	sent, err = c.sendAddr(dstAddr, dstKey, pkt)
+	const isDisco = true
+	sent, err = c.sendAddr(dstAddr, dstKey, pkt, isDisco)
 	c.logf("SendDerpCatDisco: sent=%v, err=%v", sent, err)
 	return sent, err
 }
@@ -2209,6 +2222,9 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 			}
 			return
 		}
+	case c.derpCatServerMode:
+		// In derpcat server mode, accept disco from unknown peers
+		di = c.discoInfoForKnownPeerLocked(sender)
 	case c.peerMap.knownPeerDiscoKey(sender):
 		di = c.discoInfoForKnownPeerLocked(sender)
 	default:
@@ -2296,7 +2312,11 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 	switch dm := dm.(type) {
 	case *disco.Ping:
 		metricRecvDiscoPing.Add(1)
-		c.handlePingLocked(dm, src, di, derpNodeSrc)
+		if dm.Meow && c.derpCatServerMode {
+			c.handlePingMeowLocked(dm, src, di, derpNodeSrc)
+		} else {
+			c.handlePingLocked(dm, src, di, derpNodeSrc)
+		}
 	case *disco.Pong:
 		metricRecvDiscoPong.Add(1)
 		// There might be multiple nodes for the sender's DiscoKey.
@@ -2521,6 +2541,20 @@ func (c *Conn) unambiguousNodeKeyOfPingLocked(dm *disco.Ping, dk key.DiscoPublic
 	}
 
 	return nk, false
+}
+
+func (c *Conn) handlePingMeowLocked(dm *disco.Ping, src netip.AddrPort, di *discoInfo, derpNodeSrc key.NodePublic) {
+	c.logf("got a meow from %v/%v", src, derpNodeSrc)
+	if c.onMeow == nil {
+		panic("INTERNAL ERROR: no onMeow set")
+	}
+	go func() {
+		c.onMeow(derpNodeSrc, di.discoKey)
+
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		// TODO: reply to the meow ping
+	}()
 }
 
 // di is the discoInfo of the source of the ping.
