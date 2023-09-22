@@ -51,6 +51,7 @@ const (
 	TypeCallMeMaybeVia                   = MessageType(0x07)
 	TypeAllocateUDPRelayEndpointRequest  = MessageType(0x08)
 	TypeAllocateUDPRelayEndpointResponse = MessageType(0x09)
+	TypeMeowed                           = MessageType(0x0a) // derpcat server tells client that the client was added to the netmap
 )
 
 const v0 = byte(0)
@@ -103,6 +104,8 @@ func Parse(p []byte) (Message, error) {
 		return parseAllocateUDPRelayEndpointRequest(ver, p)
 	case TypeAllocateUDPRelayEndpointResponse:
 		return parseAllocateUDPRelayEndpointResponse(ver, p)
+	case TypeMeowed:
+		return &Meowed{}, nil
 	default:
 		return nil, fmt.Errorf("unknown message type 0x%02x", byte(t))
 	}
@@ -658,4 +661,11 @@ func parseCallMeMaybeVia(ver uint8, p []byte) (m *CallMeMaybeVia, err error) {
 	}
 	err = m.decode(p)
 	return m, err
+}
+
+type Meowed struct{}
+
+func (m *Meowed) AppendMarshal(b []byte) []byte {
+	ret, _ := appendMsgHeader(b, TypeMeowed, v0, 0)
+	return ret
 }

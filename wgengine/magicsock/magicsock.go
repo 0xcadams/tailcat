@@ -170,6 +170,7 @@ type Conn struct {
 
 	derpCatServerMode bool
 	onMeow            func(key.NodePublic, key.DiscoPublic)
+	onMeowed          func()
 
 	// ================================================================
 	// No locking required to access these fields, either because
@@ -620,6 +621,10 @@ func (c *Conn) SetDisco(priv key.DiscoPrivate) {
 func (c *Conn) BeDerpCatServer(onMeow func(key.NodePublic, key.DiscoPublic)) {
 	c.derpCatServerMode = true
 	c.onMeow = onMeow
+}
+
+func (c *Conn) BeDerpCatClient(onMeowed func()) {
+	c.onMeowed = onMeowed
 }
 
 // NewConn creates a magic Conn listening on opts.Port.
@@ -1158,12 +1163,6 @@ func (c *Conn) DerpCatPing(dst key.NodePublic, res *ipnstate.PingResult, cb func
 		cb(res)
 		return
 	}
-
-	// TODO(bradfitz): actually wait for the reply from the server.
-	// For now, just sleep to give it some time to reprogram things.
-	// This is trashy.
-	time.Sleep(time.Second / 3)
-
 	cb(res)
 }
 
@@ -2316,6 +2315,10 @@ func (c *Conn) handleDiscoMessage(msg []byte, src epAddr, shouldBeRelayHandshake
 	}
 
 	switch dm := dm.(type) {
+	case *disco.Meowed:
+		if c.onMeowed != nil {
+			go c.onMeowed()
+		}
 	case *disco.Ping:
 		metricRecvDiscoPing.Add(1)
 		if dm.Meow && c.derpCatServerMode {
@@ -2557,9 +2560,9 @@ func (c *Conn) handlePingMeowLocked(dm *disco.Ping, src netip.AddrPort, di *disc
 	go func() {
 		c.onMeow(derpNodeSrc, di.discoKey)
 
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		// TODO: reply to the meow ping
+		// Tell the client they may proceed.
+		dstAddr := netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, 1)
+		c.sendDiscoMessage(dstAddr, derpNodeSrc, di.discoKey, &disco.Meowed{}, discoVerboseLog)
 	}()
 }
 
