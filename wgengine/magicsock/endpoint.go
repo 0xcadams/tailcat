@@ -1133,7 +1133,6 @@ func (de *endpoint) send(buffs [][]byte, offset int) error {
 		if allOk {
 			return nil
 		}
-		panic(fmt.Sprintf("boom sending to %v", derpAddr))
 	}
 	return err
 }
