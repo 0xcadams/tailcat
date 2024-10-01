@@ -160,6 +160,8 @@ func (c *Client) parseServerInfo(b []byte) (*ServerInfo, error) {
 	return info, nil
 }
 
+const ClientName = "tp-vc"
+
 // ClientInfo is the information a DERP client sends to the server
 // about itself when it connects.
 type ClientInfo struct {
@@ -179,6 +181,10 @@ type ClientInfo struct {
 
 	// IsProber is whether this client is a prober.
 	IsProber bool `json:",omitempty"`
+
+	// Client is a client identifier for stats.
+	// It's usually unset.
+	Client string `json:"tailpipe,omitempty"`
 }
 
 // Equal reports if two clientInfo values are equal.
@@ -198,6 +204,7 @@ func (c *Client) sendClientKey() error {
 		MeshKey:     c.meshKey,
 		CanAckPings: c.canAckPings,
 		IsProber:    c.isProber,
+		Client:      ClientName,
 	})
 	if err != nil {
 		return err
