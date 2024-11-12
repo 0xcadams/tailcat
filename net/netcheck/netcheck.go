@@ -772,6 +772,9 @@ type GetReportOpts struct {
 	OnlyTCP443 bool
 	// OnlySTUN constrains netcheck reporting to STUN measurements over UDP.
 	OnlySTUN bool
+
+	SkipCaptivePortal bool
+	StopOnFirstUDP    bool
 }
 
 // getLastDERPActivity calls o.GetLastDERPActivity if both o and
@@ -915,7 +918,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap, opts *GetRe
 	// it's unnecessary.
 	captivePortalDone := syncs.ClosedChan()
 	captivePortalStop := func() {}
-	if buildfeatures.HasCaptivePortal && !rs.incremental && !onlySTUN {
+	if buildfeatures.HasCaptivePortal && !rs.incremental && !onlySTUN && !opts.SkipCaptivePortal {
 		start := hookStartCaptivePortalDetection.Get()
 		captivePortalDone, captivePortalStop = start(ctx, rs, dm, preferredDERP)
 	}
@@ -1614,6 +1617,9 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 	rs.inFlight[txID] = func(ipp netip.AddrPort) {
 		rs.addNodeLatency(node, ipp, time.Since(sent))
 		cancelSet() // abort other nodes in this set
+		if rs.opts.StopOnFirstUDP {
+			rs.stopProbes()
+		}
 	}
 	rs.mu.Unlock()
 
