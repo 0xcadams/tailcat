@@ -560,6 +560,7 @@ func (lb *locoBackend) Start() error {
 	lb.mu.Unlock()
 
 	e.SetNetworkMap(nm)
+	mc.SetNetworkMap(nm.SelfNode, nm.Peers)
 	lb.sys.Netstack.Get().UpdateNetstackIPs(nm)
 	mc.SetNetworkUp(true)
 	lb.logf("NetworkMap: %v", logger.AsJSON(nm))
@@ -642,7 +643,9 @@ func (b *locoBackend) onMeow(src key.NodePublic, discoPub key.DiscoPublic) {
 	b.nm = nm
 
 	eng := b.sys.Engine.Get()
+	mc := b.sys.MagicSock.Get()
 	eng.SetNetworkMap(nm)
+	mc.SetNetworkMap(nm.SelfNode, nm.Peers)
 	b.sys.Netstack.Get().UpdateNetstackIPs(nm)
 
 	wgConf := &wgcfg.Config{
