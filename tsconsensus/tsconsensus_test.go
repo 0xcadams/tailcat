@@ -132,7 +132,7 @@ func startControl(t testing.TB) (control *testcontrol.Server, controlURL string)
 	})
 
 	derpLogf := logger.Discard
-	derpMap := integration.RunDERPAndSTUN(t, derpLogf, "127.0.0.1")
+	_, derpMap := integration.RunDERPAndSTUN(t, derpLogf, "127.0.0.1")
 	control = &testcontrol.Server{
 		DERPMap: derpMap,
 		DNSConfig: &tailcfg.DNSConfig{

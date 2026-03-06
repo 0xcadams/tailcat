@@ -23,7 +23,7 @@ func main() {
 	flag.Parse()
 
 	var t fakeTB
-	derpMap := integration.RunDERPAndSTUN(t, logger.Discard, "127.0.0.1")
+	_, derpMap := integration.RunDERPAndSTUN(t, logger.Discard, "127.0.0.1")
 
 	control := &testcontrol.Server{
 		DERPMap:         derpMap,

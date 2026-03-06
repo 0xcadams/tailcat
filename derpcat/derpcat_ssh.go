@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/tailscale/golang-x-crypto/ssh"
+	"golang.org/x/crypto/ssh"
 	"tailscale.com/ipn/ipnlocal"
 	"tailscale.com/ssh/tailssh"
 )

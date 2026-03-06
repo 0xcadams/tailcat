@@ -69,7 +69,7 @@ func newHarness(t *testing.T) *Harness {
 		},
 	}
 
-	derpMap := integration.RunDERPAndSTUN(t, t.Logf, bindHost)
+	_, derpMap := integration.RunDERPAndSTUN(t, t.Logf, bindHost)
 	cs.DERPMap = derpMap
 
 	var (

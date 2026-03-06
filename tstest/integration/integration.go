@@ -293,7 +293,7 @@ func exe() string {
 // RunDERPAndSTUN runs a local DERP and STUN server for tests, returning the derpMap
 // that clients should use. This creates resources that must be cleaned up with the
 // returned cleanup function.
-func RunDERPAndSTUN(t testing.TB, logf logger.Logf, ipAddress string) (derpServer *derp.Server, derpMap *tailcfg.DERPMap) {
+func RunDERPAndSTUN(t testing.TB, logf logger.Logf, ipAddress string) (derpServer *derpserver.Server, derpMap *tailcfg.DERPMap) {
 	t.Helper()
 
 	d := derpserver.New(key.NewNode(), logf)
@@ -525,7 +525,7 @@ func NewTestEnv(t testing.TB, opts ...TestEnvOpt) *TestEnv {
 	if runtime.GOOS == "windows" {
 		t.Skip("not tested/working on Windows yet")
 	}
-	derpMap := RunDERPAndSTUN(t, logger.Discard, "127.0.0.1")
+	_, derpMap := RunDERPAndSTUN(t, logger.Discard, "127.0.0.1")
 	logc := new(LogCatcher)
 	control := &testcontrol.Server{
 		Logf:    logger.WithPrefix(t.Logf, "testcontrol: "),

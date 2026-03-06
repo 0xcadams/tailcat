@@ -1968,14 +1968,15 @@ func (c *Conn) SendDerpCatDisco(dstKey key.NodePublic, m disco.Message) (sent bo
 	}
 	pkt := make([]byte, 0, 512) // TODO: size it correctly? pool? if it matters.
 	pkt = append(pkt, disco.Magic...)
-	pkt = c.discoPublic.AppendTo(pkt)
-	di := c.discoInfoLocked(dstDisco)
+	pkt = c.discoAtomic.Public().AppendTo(pkt)
+	di := c.discoInfoForKnownPeerLocked(dstDisco)
 	c.mu.Unlock()
 
 	box := di.sharedKey.Seal(m.AppendMarshal(nil))
 	pkt = append(pkt, box...)
 	const isDisco = true
-	sent, err = c.sendAddr(dstAddr, dstKey, pkt, isDisco)
+	const isGeneveEncap = false
+	sent, err = c.sendAddr(dstAddr, dstKey, pkt, isDisco, isGeneveEncap)
 	c.logf("SendDerpCatDisco: sent=%v, err=%v", sent, err)
 	return sent, err
 }
@@ -2566,7 +2567,7 @@ func (c *Conn) unambiguousNodeKeyOfPingLocked(dm *disco.Ping, dk key.DiscoPublic
 	return nk, false
 }
 
-func (c *Conn) handlePingMeowLocked(dm *disco.Ping, src netip.AddrPort, di *discoInfo, derpNodeSrc key.NodePublic) {
+func (c *Conn) handlePingMeowLocked(dm *disco.Ping, src epAddr, di *discoInfo, derpNodeSrc key.NodePublic) {
 	c.logf("got a meow from %v/%v", src, derpNodeSrc)
 	if c.onMeow == nil {
 		panic("INTERNAL ERROR: no onMeow set")
@@ -2575,7 +2576,7 @@ func (c *Conn) handlePingMeowLocked(dm *disco.Ping, src netip.AddrPort, di *disc
 		c.onMeow(derpNodeSrc, di.discoKey)
 
 		// Tell the client they may proceed.
-		dstAddr := netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, uint16(c.derpCatRegion()))
+		dstAddr := epAddr{ap: netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, uint16(c.derpCatRegion()))}
 		c.sendDiscoMessage(dstAddr, derpNodeSrc, di.discoKey, &disco.Meowed{}, discoVerboseLog)
 	}()
 }

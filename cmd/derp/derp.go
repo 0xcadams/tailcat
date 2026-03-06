@@ -29,8 +29,7 @@ import (
 	"go4.org/mem"
 	xmaps "golang.org/x/exp/maps"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
-	"tailscale.com/derp"
-	"tailscale.com/derp/derphttp"
+	"tailscale.com/derp/derpserver"
 	"tailscale.com/derpcat"
 	"tailscale.com/envknob"
 	"tailscale.com/net/socks5"
@@ -569,7 +568,7 @@ func parsePortSet(s string) (ports set.Set[uint16], services set.Set[string], _ 
 }
 
 func runDevDERP(logf logger.Logf) *tailcfg.DERPRegion {
-	d := derp.NewServer(key.NewNode(), logf)
+	d := derpserver.New(key.NewNode(), logf)
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		panic(err)
@@ -577,7 +576,7 @@ func runDevDERP(logf logger.Logf) *tailcfg.DERPRegion {
 
 	logf("starting dev derp on %v ...", ln.Addr())
 
-	httpsrv := httptest.NewUnstartedServer(derphttp.Handler(d))
+	httpsrv := httptest.NewUnstartedServer(derpserver.Handler(d))
 	httpsrv.Listener = ln
 	httpsrv.Config.ErrorLog = logger.StdLogger(logf)
 	httpsrv.Config.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler))

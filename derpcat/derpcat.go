@@ -23,6 +23,7 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	go4mem "go4.org/mem"
 	"tailscale.com/envknob"
+	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/ipn/store/mem"
@@ -36,6 +37,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
+	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
@@ -192,7 +194,11 @@ func NewServer(priv key.NodePrivate, logf logger.Logf, regs ...*tailcfg.DERPRegi
 	}
 
 	sys := &lb.sys
-	netMon, err := netmon.New(func(format string, args ...any) {
+	bus := eventbus.New()
+	sys.Set(bus)
+	sys.Set(health.NewTracker(bus))
+
+	netMon, err := netmon.New(bus, func(format string, args ...any) {
 		logf(format, args...)
 	})
 	if err != nil {
@@ -499,10 +505,10 @@ func (lb *locoBackend) Start() error {
 	mc.SetPrivateKey(lb.priv)
 	mc.SetDERPMap(lb.dm)
 
-	derpStr := fmt.Sprintf("127.3.3.40:%d", lb.derpRegionID())
+	derpRegion := lb.derpRegionID()
 
 	nm := &netmap.NetworkMap{
-		PrivateKey: lb.priv,
+		NodeKey: lb.pub,
 	}
 	if lb.serverPub.IsZero() {
 		nm.SSHPolicy = lb.sshPolicy()
@@ -520,7 +526,7 @@ func (lb *locoBackend) Start() error {
 			DiscoKey:   discoPriv.Public(),
 			Addresses:  []netip.Prefix{lb.addrPrefix},
 			AllowedIPs: []netip.Prefix{lb.addrPrefix, allIPv6},
-			DERP:       derpStr,
+			HomeDERP:   derpRegion,
 		}).View()
 	} else {
 		// We're the client.
@@ -535,7 +541,7 @@ func (lb *locoBackend) Start() error {
 			Key:       lb.pub,
 			DiscoKey:  mc.DiscoPublicKey(),
 			Addresses: []netip.Prefix{lb.addrPrefix},
-			DERP:      derpStr,
+			HomeDERP:  derpRegion,
 		}).View()
 		nm.Peers = append(nm.Peers, (&tailcfg.Node{
 			ID:         1,
@@ -546,7 +552,7 @@ func (lb *locoBackend) Start() error {
 			DiscoKey:   lb.serverPub.AsDiscoPublic(),
 			Addresses:  []netip.Prefix{serverAddrPrefix},
 			AllowedIPs: []netip.Prefix{serverAddrPrefix, allIPv6},
-			DERP:       derpStr,
+			HomeDERP:   derpRegion,
 		}).View())
 	}
 	lb.mu.Lock()
@@ -559,7 +565,6 @@ func (lb *locoBackend) Start() error {
 	lb.logf("NetworkMap: %v", logger.AsJSON(nm))
 
 	wgConf := &wgcfg.Config{
-		Name:       "self",
 		PrivateKey: lb.priv,
 		Addresses:  []netip.Prefix{lb.addrPrefix},
 		MTU:        1280,
@@ -600,7 +605,7 @@ func (b *locoBackend) onMeow(src key.NodePublic, discoPub key.DiscoPublic) {
 		return
 	}
 	id := len(b.clients) + 2 // server id ID 1, clients are IDs 2, 3, ...
-	derpStr := fmt.Sprintf("127.3.3.40:%d", b.derpRegionID())
+	derpRegion := b.derpRegionID()
 	mak.Set(&b.clients, src, &tailcfg.Node{
 		ID:         tailcfg.NodeID(id),
 		StableID:   tailcfg.StableNodeID(fmt.Sprint(id)),
@@ -610,12 +615,12 @@ func (b *locoBackend) onMeow(src key.NodePublic, discoPub key.DiscoPublic) {
 		DiscoKey:   discoPub,
 		Addresses:  []netip.Prefix{pfxOf(dcAddrForKey(src))},
 		AllowedIPs: []netip.Prefix{pfxOf(dcAddrForKey(src))},
-		DERP:       derpStr,
+		HomeDERP:   derpRegion,
 	})
 
 	nm := &netmap.NetworkMap{
-		PrivateKey: b.priv,
-		SSHPolicy:  b.sshPolicy(),
+		NodeKey:   b.pub,
+		SSHPolicy: b.sshPolicy(),
 		SelfNode: (&tailcfg.Node{
 			ID:         1,
 			StableID:   "1",
@@ -625,7 +630,7 @@ func (b *locoBackend) onMeow(src key.NodePublic, discoPub key.DiscoPublic) {
 			DiscoKey:   b.priv.AsDiscoPrivate().Public(), // TODO: cache
 			Addresses:  []netip.Prefix{b.addrPrefix},
 			AllowedIPs: []netip.Prefix{b.addrPrefix, allIPv6},
-			DERP:       derpStr,
+			HomeDERP:   derpRegion,
 		}).View(),
 	}
 	for _, n := range b.clients {
@@ -641,7 +646,6 @@ func (b *locoBackend) onMeow(src key.NodePublic, discoPub key.DiscoPublic) {
 	b.sys.Netstack.Get().UpdateNetstackIPs(nm)
 
 	wgConf := &wgcfg.Config{
-		Name:       "self",
 		PrivateKey: b.priv,
 		Addresses:  []netip.Prefix{b.addrPrefix, allIPv6},
 		MTU:        1280,
@@ -702,7 +706,8 @@ func createEngine(logf logger.Logf, sys *tsd.System) (err error) {
 		Dialer:        sys.Dialer.Get(),
 		SetSubsystem:  sys.Set,
 		Metrics:       sys.UserMetricsRegistry(),
-		HealthTracker: sys.HealthTracker(),
+		HealthTracker: sys.HealthTracker.Get(),
+		EventBus:      sys.Bus.Get(),
 	}
 	netns.SetEnabled(false)
 	e, err := wgengine.NewUserspaceEngine(logf, conf)
@@ -746,7 +751,11 @@ func NewClient(logf logger.Logf, server ConnBlob, priv key.NodePrivate) (*Client
 	}
 
 	sys := &lb.sys
-	netMon, err := netmon.New(func(format string, args ...any) {
+	bus := eventbus.New()
+	sys.Set(bus)
+	sys.Set(health.NewTracker(bus))
+
+	netMon, err := netmon.New(bus, func(format string, args ...any) {
 		logf(format, args...)
 	})
 	if err != nil {
