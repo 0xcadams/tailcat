@@ -29,7 +29,7 @@ import (
 	xmaps "golang.org/x/exp/maps"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"tailscale.com/derp/derpserver"
-	"tailscale.com/derpcat"
+	"github.com/tailscale/derpcat/derpcat"
 	"tailscale.com/envknob"
 	"tailscale.com/net/socks5"
 	"tailscale.com/tailcfg"

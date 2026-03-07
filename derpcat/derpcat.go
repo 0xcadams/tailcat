@@ -22,6 +22,7 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	go4mem "go4.org/mem"
+	"tailscale.com/disco"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
@@ -120,6 +121,11 @@ type locoBackend struct {
 	dm         *tailcfg.DERPMap
 	logf       logger.Logf
 	serverPub  key.NodePublic // non-zero if we're a client (server's public key)
+	isServer   bool
+
+	// discoMessageHook is called when a disco message is received.
+	// Set before createEngine.
+	discoMessageHook func(dm disco.Message, sender key.DiscoPublic, src key.NodePublic) bool
 
 	mu             sync.Mutex
 	clients        map[key.NodePublic]*tailcfg.Node // for the server
@@ -212,7 +218,22 @@ func NewServer(priv key.NodePrivate, logf logger.Logf, regs ...*tailcfg.DERPRegi
 	var store ipn.StateStore = new(mem.Store)
 	sys.Set(store)
 
-	if err := createEngine(logf, sys); err != nil {
+	lb.isServer = true
+	lb.discoMessageHook = func(dm disco.Message, sender key.DiscoPublic, src key.NodePublic) bool {
+		switch dm.(type) {
+		case *MeowPing:
+			go lb.onMeow(src, sender)
+			mc := lb.sys.MagicSock.Get()
+			derpRegion := lb.derpRegionID()
+			go mc.SendDiscoMessageOverDERP(sender, src, derpRegion, &Meowed{})
+			return true
+		case *Meowed:
+			return true
+		}
+		return false
+	}
+
+	if err := createEngine(logf, lb); err != nil {
 		return nil, fmt.Errorf("createEngine: %w", err)
 	}
 	ns, err := newNetstack(logf, sys)
@@ -435,10 +456,7 @@ func (ci *ConnInfo) Expand(ctx context.Context, forServer bool) error {
 			log.Fatalf("netcheck.Standalone: %v", err)
 		}
 		t0 := time.Now()
-		nr, err := nc.GetReport(ctx, &dm, &netcheck.GetReportOpts{
-			SkipCaptivePortal: true,
-			StopOnFirstUDP:    true,
-		})
+		nr, err := nc.GetReport(ctx, &dm, &netcheck.GetReportOpts{})
 		if err != nil {
 			return fmt.Errorf("failed to get netcheck report: %w", err)
 		}
@@ -513,9 +531,8 @@ func (lb *locoBackend) Start() error {
 	if lb.serverPub.IsZero() {
 		nm.SSHPolicy = lb.sshPolicy()
 		// We're the server. (hence the serverPub is zero)
-		discoPriv := lb.priv.AsDiscoPrivate()
-		mc.SetDisco(discoPriv)
-		mc.BeDerpCatServer(lb.onMeow)
+		discoPriv := nodePrivateAsDiscoPrivate(lb.priv)
+		mc.SetDiscoKey(discoPriv)
 
 		nm.SelfNode = (&tailcfg.Node{
 			ID:         1,
@@ -549,7 +566,7 @@ func (lb *locoBackend) Start() error {
 			Name:       "server.derpcat.",
 			User:       100,
 			Key:        lb.serverPub,
-			DiscoKey:   lb.serverPub.AsDiscoPublic(),
+			DiscoKey:   nodePublicAsDiscoPublic(lb.serverPub),
 			Addresses:  []netip.Prefix{serverAddrPrefix},
 			AllowedIPs: []netip.Prefix{serverAddrPrefix, allIPv6},
 			HomeDERP:   derpRegion,
@@ -628,7 +645,7 @@ func (b *locoBackend) onMeow(src key.NodePublic, discoPub key.DiscoPublic) {
 			Name:       "server.derpcat.",
 			User:       100,
 			Key:        b.pub,
-			DiscoKey:   b.priv.AsDiscoPrivate().Public(), // TODO: cache
+			DiscoKey:   nodePrivateAsDiscoPrivate(b.priv).Public(), // TODO: cache
 			Addresses:  []netip.Prefix{b.addrPrefix},
 			AllowedIPs: []netip.Prefix{b.addrPrefix, allIPv6},
 			HomeDERP:   derpRegion,
@@ -697,12 +714,9 @@ func newNetstack(logf logger.Logf, sys *tsd.System) (*netstack.Impl, error) {
 	)
 }
 
-// createEngine tries to the wgengine.Engine based on the order of tunnels
-// specified in the command line flags.
-//
-// onlyNetstack is true if the user has explicitly requested that we use netstack
-// for all networking.
-func createEngine(logf logger.Logf, sys *tsd.System) (err error) {
+// createEngine creates the wgengine.Engine with userspace networking.
+func createEngine(logf logger.Logf, lb *locoBackend) (err error) {
+	sys := &lb.sys
 	conf := wgengine.Config{
 		ListenPort:    0,
 		NetMon:        sys.NetMon.Get(),
@@ -711,6 +725,10 @@ func createEngine(logf logger.Logf, sys *tsd.System) (err error) {
 		Metrics:       sys.UserMetricsRegistry(),
 		HealthTracker: sys.HealthTracker.Get(),
 		EventBus:      sys.Bus.Get(),
+		AcceptDiscoFromUnknownPeer: func(sender key.DiscoPublic) bool {
+			return lb.isServer
+		},
+		DiscoMessageHook: lb.discoMessageHook,
 	}
 	netns.SetEnabled(false)
 	e, err := wgengine.NewUserspaceEngine(logf, conf)
@@ -772,7 +790,20 @@ func NewClient(logf logger.Logf, server ConnBlob, priv key.NodePrivate) (*Client
 	var store ipn.StateStore = new(mem.Store)
 	sys.Set(store)
 
-	if err := createEngine(logf, sys); err != nil {
+	meowWait := make(chan struct{})
+	onMeowed := sync.OnceFunc(func() { close(meowWait) })
+	lb.discoMessageHook = func(dm disco.Message, sender key.DiscoPublic, src key.NodePublic) bool {
+		switch dm.(type) {
+		case *Meowed:
+			go onMeowed()
+			return true
+		case *MeowPing:
+			return true // client ignores MeowPing
+		}
+		return false
+	}
+
+	if err := createEngine(logf, lb); err != nil {
 		return nil, fmt.Errorf("createEngine: %w", err)
 	}
 	ns, err := newNetstack(logf, sys)
@@ -804,6 +835,7 @@ func NewClient(logf logger.Logf, server ConnBlob, priv key.NodePrivate) (*Client
 		ci:         ci,
 		lb:         lb,
 		serverAddr: dcAddrForKey(ci.ServerPublic.NodePublic),
+		meowWait:   meowWait,
 	}, nil
 }
 
@@ -815,8 +847,6 @@ type PingResult struct {
 }
 
 func (c *Client) Start() error {
-	c.meowWait = make(chan struct{})
-	c.lb.sys.MagicSock.Get().BeDerpCatClient(sync.OnceFunc(func() { close(c.meowWait) }))
 	return c.lb.Start()
 }
 
@@ -825,26 +855,27 @@ func (c *Client) Ping(ctx context.Context) (PingResult, error) {
 	defer cancel()
 
 	var zero PingResult
-
 	t0 := time.Now()
 	mc := c.lb.sys.MagicSock.Get()
 
-	resc := make(chan *ipnstate.PingResult, 1)
-	res := &ipnstate.PingResult{}
-	mc.DerpCatPing(c.ci.ServerPublic.NodePublic, res, func(pr *ipnstate.PingResult) {
-		resc <- pr
-	})
+	dstNode := c.ci.ServerPublic.NodePublic
+	dstDisco := nodePublicAsDiscoPublic(dstNode)
+	derpRegion := c.lb.derpRegionID()
+	msg := &MeowPing{
+		NodeKey: c.lb.pub,
+	}
+
+	sent, err := mc.SendDiscoMessageOverDERP(dstDisco, dstNode, derpRegion, msg)
+	if err != nil {
+		return zero, fmt.Errorf("sending meow: %w", err)
+	}
+	if !sent {
+		return zero, fmt.Errorf("meow not sent")
+	}
+
 	select {
-	case pr := <-resc:
-		if pr.Err != "" {
-			return zero, errors.New(pr.Err)
-		}
-		select {
-		case <-c.meowWait:
-			return PingResult{time.Since(t0)}, nil
-		case <-ctx.Done():
-			return zero, ctx.Err()
-		}
+	case <-c.meowWait:
+		return PingResult{time.Since(t0)}, nil
 	case <-ctx.Done():
 		return zero, ctx.Err()
 	}
@@ -937,4 +968,20 @@ func (b *locoBackend) sshPolicy() *tailcfg.SSHPolicy {
 // (auth-free) server.
 func (s *Server) CanRunSSHServer() bool {
 	return s.lb.ShouldRunSSH() // eh, reuse this method that ssh/tailssh needs of its ipnLocalBackend interface
+}
+
+// nodePrivateAsDiscoPrivate converts a NodePrivate to a DiscoPrivate by
+// reusing the same raw key bytes. This is used in derpcat where the server
+// uses its node key as the disco key.
+func nodePrivateAsDiscoPrivate(k key.NodePrivate) key.DiscoPrivate {
+	raw := k.Raw32()
+	return key.DiscoPrivateFromRaw32(go4mem.B(raw[:]))
+}
+
+// nodePublicAsDiscoPublic converts a NodePublic to a DiscoPublic by
+// reusing the same raw key bytes. This is used in derpcat where the
+// server's node public key doubles as its disco public key.
+func nodePublicAsDiscoPublic(k key.NodePublic) key.DiscoPublic {
+	raw := k.Raw32()
+	return key.DiscoPublicFromRaw32(go4mem.B(raw[:]))
 }
