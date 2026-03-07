@@ -6,66 +6,66 @@ TAGS ?= "latest"
 PLATFORM ?= "flyio" ## flyio==linux/amd64. Set to "" to build all platforms.
 
 vet: ## Run go vet
-	./tool/go vet ./...
+	go vet ./...
 
 tidy: ## Run go mod tidy and update nix flake hashes
-	./tool/go mod tidy
+	go mod tidy
 	./update-flake.sh
 
 lint: ## Run golangci-lint
-	./tool/go run github.com/golangci/golangci-lint/cmd/golangci-lint run
+	go run github.com/golangci/golangci-lint/cmd/golangci-lint run
 
 updatedeps: ## Update depaware deps
 	# depaware (via x/tools/go/packages) shells back to "go", so make sure the "go"
 	# it finds in its $$PATH is the right one.
-	PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --update --vendor --internal \
+	PATH="$$(go env GOROOT)/bin:$$PATH" go run github.com/tailscale/depaware --update --vendor --internal \
 		tailscale.com/cmd/tailscaled \
 		tailscale.com/cmd/tailscale \
 		tailscale.com/cmd/derper \
 		tailscale.com/cmd/k8s-operator \
 		tailscale.com/cmd/stund \
 		tailscale.com/cmd/tsidp
-	PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --update --goos=linux,darwin,windows,android,ios --vendor --internal \
+	PATH="$$(go env GOROOT)/bin:$$PATH" go run github.com/tailscale/depaware --update --goos=linux,darwin,windows,android,ios --vendor --internal \
 		tailscale.com/tsnet
-	PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --update --file=depaware-minbox.txt --goos=linux --tags="$$(./tool/go run ./cmd/featuretags --min --add=cli)" --vendor --internal \
+	PATH="$$(go env GOROOT)/bin:$$PATH" go run github.com/tailscale/depaware --update --file=depaware-minbox.txt --goos=linux --tags="$$(go run ./cmd/featuretags --min --add=cli)" --vendor --internal \
 		tailscale.com/cmd/tailscaled
-	PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --update --file=depaware-min.txt --goos=linux --tags="$$(./tool/go run ./cmd/featuretags --min)" --vendor --internal \
+	PATH="$$(go env GOROOT)/bin:$$PATH" go run github.com/tailscale/depaware --update --file=depaware-min.txt --goos=linux --tags="$$(go run ./cmd/featuretags --min)" --vendor --internal \
 		tailscale.com/cmd/tailscaled
 
 depaware: ## Run depaware checks
 	# depaware (via x/tools/go/packages) shells back to "go", so make sure the "go"
 	# it finds in its $$PATH is the right one.
-	PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --check --vendor --internal \
+	PATH="$$(go env GOROOT)/bin:$$PATH" go run github.com/tailscale/depaware --check --vendor --internal \
 		tailscale.com/cmd/tailscaled \
 		tailscale.com/cmd/tailscale \
 		tailscale.com/cmd/derper \
 		tailscale.com/cmd/k8s-operator \
 		tailscale.com/cmd/stund \
 		tailscale.com/cmd/tsidp
-	PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --check --goos=linux,darwin,windows,android,ios --vendor --internal \
+	PATH="$$(go env GOROOT)/bin:$$PATH" go run github.com/tailscale/depaware --check --goos=linux,darwin,windows,android,ios --vendor --internal \
 		tailscale.com/tsnet
-	PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --check --file=depaware-minbox.txt --goos=linux --tags="$$(./tool/go run ./cmd/featuretags --min --add=cli)" --vendor --internal \
+	PATH="$$(go env GOROOT)/bin:$$PATH" go run github.com/tailscale/depaware --check --file=depaware-minbox.txt --goos=linux --tags="$$(go run ./cmd/featuretags --min --add=cli)" --vendor --internal \
 		tailscale.com/cmd/tailscaled
-	PATH="$$(./tool/go env GOROOT)/bin:$$PATH" ./tool/go run github.com/tailscale/depaware --check --file=depaware-min.txt --goos=linux --tags="$$(./tool/go run ./cmd/featuretags --min)" --vendor --internal \
+	PATH="$$(go env GOROOT)/bin:$$PATH" go run github.com/tailscale/depaware --check --file=depaware-min.txt --goos=linux --tags="$$(go run ./cmd/featuretags --min)" --vendor --internal \
 		tailscale.com/cmd/tailscaled
 
 buildwindows: ## Build tailscale CLI for windows/amd64
-	GOOS=windows GOARCH=amd64 ./tool/go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
+	GOOS=windows GOARCH=amd64 go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
 
 build386: ## Build tailscale CLI for linux/386
-	GOOS=linux GOARCH=386 ./tool/go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
+	GOOS=linux GOARCH=386 go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
 
 buildlinuxarm: ## Build tailscale CLI for linux/arm
-	GOOS=linux GOARCH=arm ./tool/go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
+	GOOS=linux GOARCH=arm go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
 
 buildwasm: ## Build tailscale CLI for js/wasm
-	GOOS=js GOARCH=wasm ./tool/go install ./cmd/tsconnect/wasm ./cmd/tailscale/cli
+	GOOS=js GOARCH=wasm go install ./cmd/tsconnect/wasm ./cmd/tailscale/cli
 
 buildplan9:
-	GOOS=plan9 GOARCH=amd64 ./tool/go install ./cmd/tailscale ./cmd/tailscaled
+	GOOS=plan9 GOARCH=amd64 go install ./cmd/tailscale ./cmd/tailscaled
 
 buildlinuxloong64: ## Build tailscale CLI for linux/loong64
-	GOOS=linux GOARCH=loong64 ./tool/go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
+	GOOS=linux GOARCH=loong64 go install tailscale.com/cmd/tailscale tailscale.com/cmd/tailscaled
 
 buildmultiarchimage: ## Build (and optionally push) multiarch docker image
 	./build_docker.sh
@@ -73,10 +73,10 @@ buildmultiarchimage: ## Build (and optionally push) multiarch docker image
 check: staticcheck vet depaware buildwindows build386 buildlinuxarm buildwasm ## Perform basic checks and compilation tests
 
 staticcheck: ## Run staticcheck.io checks
-	./tool/go run honnef.co/go/tools/cmd/staticcheck -- $$(./tool/go run ./tool/listpkgs --ignore-3p  ./...)
+	go run honnef.co/go/tools/cmd/staticcheck -- $$(go run ./tool/listpkgs --ignore-3p  ./...)
 
 kube-generate-all: kube-generate-deepcopy ## Refresh generated files for Tailscale Kubernetes Operator
-	./tool/go generate ./cmd/k8s-operator
+	go generate ./cmd/k8s-operator
 
 # Tailscale operator watches Connector custom resources in a Kubernetes cluster
 # and caches them locally. Caching is done implicitly by controller-runtime
@@ -91,10 +91,10 @@ kube-generate-deepcopy: ## Refresh generated deepcopy functionality for Tailscal
 	./scripts/kube-deepcopy.sh
 
 spk: ## Build synology package for ${SYNO_ARCH} architecture and ${SYNO_DSM} DSM version
-	./tool/go run ./cmd/dist build synology/dsm${SYNO_DSM}/${SYNO_ARCH}
+	go run ./cmd/dist build synology/dsm${SYNO_DSM}/${SYNO_ARCH}
 
 spkall: ## Build synology packages for all architectures and DSM versions
-	./tool/go run ./cmd/dist build synology
+	go run ./cmd/dist build synology
 
 pushspk: spk ## Push and install synology package on ${SYNO_HOST} host
 	echo "Pushing SPK to root@${SYNO_HOST} (env var SYNO_HOST) ..."
@@ -135,8 +135,8 @@ publishdevproxy: check-image-repo ## Build and publish k8s-proxy image to locati
 
 .PHONY: sshintegrationtest
 sshintegrationtest: ## Run the SSH integration tests in various Docker containers
-	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 ./tool/go test -tags integrationtest -c ./ssh/tailssh -o ssh/tailssh/testcontainers/tailssh.test && \
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 ./tool/go build -o ssh/tailssh/testcontainers/tailscaled ./cmd/tailscaled && \
+	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -tags integrationtest -c ./ssh/tailssh -o ssh/tailssh/testcontainers/tailssh.test && \
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ssh/tailssh/testcontainers/tailscaled ./cmd/tailscaled && \
 	echo "Testing on ubuntu:focal" && docker build --build-arg="BASE=ubuntu:focal" -t ssh-ubuntu-focal ssh/tailssh/testcontainers && \
 	echo "Testing on ubuntu:jammy" && docker build --build-arg="BASE=ubuntu:jammy" -t ssh-ubuntu-jammy ssh/tailssh/testcontainers && \
 	echo "Testing on ubuntu:noble" && docker build --build-arg="BASE=ubuntu:noble" -t ssh-ubuntu-noble ssh/tailssh/testcontainers && \
@@ -144,11 +144,11 @@ sshintegrationtest: ## Run the SSH integration tests in various Docker container
 
 .PHONY: generate
 generate: ## Generate code
-	./tool/go generate ./...
+	go generate ./...
 
 .PHONY: pin-github-actions
 pin-github-actions:
-	./tool/go tool github.com/stacklok/frizbee actions .github/workflows
+	go tool github.com/stacklok/frizbee actions .github/workflows
 
 help: ## Show this help
 	@echo ""
@@ -161,12 +161,17 @@ help: ## Show this help
 .DEFAULT_GOAL := help
 
 tailpipe:
-	./tool/go install ./cmd/tailpipe
+	go install ./cmd/tailpipe
+
+tailpipe-crossbuild: ## Verify tailpipe cross-compiles for all supported platforms
+	GOOS=linux   GOARCH=amd64 go install ./cmd/tailpipe
+	GOOS=darwin  GOARCH=arm64 go install ./cmd/tailpipe
+	GOOS=freebsd GOARCH=amd64 go install ./cmd/tailpipe
+	GOOS=windows GOARCH=amd64 go install --tags=ts_omit_ssh ./cmd/tailpipe
 
 tailpipe-release:
-	GOOS=linux GOARCH=amd64 ./tool/go build -o tailpipe.linux-amd64 --tags=ts_omit_ssh ./cmd/tailpipe
-	GOOS=linux GOARCH=arm64 ./tool/go build -o tailpipe.linux-arm64 --tags=ts_omit_ssh ./cmd/tailpipe
-	GOOS=darwin GOARCH=amd64 ./tool/go build -o tailpipe.darwin-amd64 --tags=ts_omit_ssh ./cmd/tailpipe
-	GOOS=darwin GOARCH=arm64 ./tool/go build -o tailpipe.darwin-arm64 --tags=ts_omit_ssh ./cmd/tailpipe
+	GOOS=linux GOARCH=amd64 go build -o tailpipe.linux-amd64 --tags=ts_omit_ssh ./cmd/tailpipe
+	GOOS=linux GOARCH=arm64 go build -o tailpipe.linux-arm64 --tags=ts_omit_ssh ./cmd/tailpipe
+	GOOS=darwin GOARCH=amd64 go build -o tailpipe.darwin-amd64 --tags=ts_omit_ssh ./cmd/tailpipe
+	GOOS=darwin GOARCH=arm64 go build -o tailpipe.darwin-arm64 --tags=ts_omit_ssh ./cmd/tailpipe
 	tar zcvf tailpipe.tar.gz tailpipe.{linux,darwin}-{amd64,arm64}
-	
