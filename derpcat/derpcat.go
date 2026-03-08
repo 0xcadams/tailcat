@@ -698,8 +698,15 @@ func (b *locoBackend) Status() *ipnstate.Status {
 func dcAddrForKey(k key.NodePublic) netip.Addr {
 	var a [16]byte
 	r := k.Raw32()
-	copy(a[:], r[:])
-	a[0] = 0xfc // ULA prefix. close enough. forcing final bit to 0.
+	// Use Tailscale's ULA range fd7a:115c:a1e0::/48, filling the
+	// remaining 80 bits from the node key.
+	a[0] = 0xfd
+	a[1] = 0x7a
+	a[2] = 0x11
+	a[3] = 0x5c
+	a[4] = 0xa1
+	a[5] = 0xe0
+	copy(a[6:], r[:10])
 	return netip.AddrFrom16(a)
 }
 

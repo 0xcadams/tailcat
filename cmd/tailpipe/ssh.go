@@ -20,7 +20,7 @@ func clientSSHMode(logf logger.Logf) {
 	args := flag.Args()
 	args = args[1:] // trim off "ssh"
 	if len(args) == 0 {
-		usage("derp ssh [-p <port|ip:port)> [user@]<derpaddr>")
+		usage("derp ssh [-p <port|ip:port)> [user@]<derpaddr> [command ...]")
 	}
 
 	portOrIPPort := "22"
@@ -32,6 +32,7 @@ func clientSSHMode(logf logger.Logf) {
 		}
 	}
 	dst := args[0] // either a derpaddr alone or "user@<derpaddr>"
+	cmdArgs := args[1:]
 
 	connBlobStr := dst
 	if strings.Contains(dst, "@") {
@@ -45,9 +46,11 @@ func clientSSHMode(logf logger.Logf) {
 		"/usr/bin/ssh",
 		"-o", "UpdateHostKeys no",
 		"-o", "StrictHostKeyChecking no",
+		"-o", "UserKnownHostsFile /dev/null",
 		"-o", fmt.Sprintf("ProxyCommand=%s --key=%q %s %s", exe, *flagKey, connBlobStr, portOrIPPort),
 		dst,
 	}
+	argv = append(argv, cmdArgs...)
 	err = syscall.Exec("/usr/bin/ssh", argv, os.Environ())
 	log.Fatalf("failed to exec: %v", err)
 }
