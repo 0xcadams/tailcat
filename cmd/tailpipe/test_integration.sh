@@ -13,6 +13,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
+# macOS doesn't have coreutils timeout; use a perl one-liner as fallback.
+if ! command -v timeout &>/dev/null; then
+    timeout() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+fi
+
 TAILPIPE=""
 SERVER_PID=""
 ADDR_FILE=""
