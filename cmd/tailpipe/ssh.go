@@ -20,7 +20,7 @@ func clientSSHMode(logf logger.Logf) {
 	args := flag.Args()
 	args = args[1:] // trim off "ssh"
 	if len(args) == 0 {
-		usage("derp ssh [-p <port|ip:port)> [user@]<derpaddr> [command ...]")
+		usage("tailpipe ssh [-p <port|ip:port>] [user@]<addrblob> [command ...]")
 	}
 
 	portOrIPPort := "22"

@@ -43,7 +43,7 @@ var (
 	flagKey     = flag.String("key", "", "'new' for an ephemeral one, '' for the 'default' key (if it exists), else a new key. Otherwise the path to a *.key.json or a name like 'foo' to read it from $CONFIG/tailpipe/keys/foo.key.json")
 	flagAllow   = flag.String("allow", "", "comma-separated list of public keys to allow access to the server")
 	flagVerbose = flag.Bool("verbose", false, "be verbose")
-	flagJSON    = flag.Bool("json", false, "output JSON")
+	flagJSON    = flag.Bool("json", false, "in server mode, write {\"listenAddr\": ...} JSON to stdout")
 )
 
 func usage(err string) {
@@ -73,25 +73,33 @@ Client mode, to default port 0 for stdin/stdout pipe:
 
 	echo hello | tailpipe <addrblob>
 
-Client mode to an explicit pipe:
+Client mode to an explicit port:
 
 	echo "GET / HTTP/1.1..." | tailpipe <addrblob> 80
+
+Client mode, ping:
+
+	tailpipe ping <addrblob>
 
 Client mode, ssh:
 
 	tailpipe ssh <addrblob>
+	tailpipe ssh <addrblob> <command> [args...]
 
 Client mode, ssh to specific IP:port via addrblob's exit node:
 
 	tailpipe ssh -p 10.0.0.1:22 <addrblob>
 
-Client mode, run an ephemeral socks (socks5h) proxy and pass
-its address as 'all_proxy' environment variable to a child
-process:
+Client mode, run an ephemeral SOCKS5 proxy and pass its address
+as 'all_proxy' environment variable to a child process:
 
 	tailpipe socks <addrblob> <cmd> [args...]
 	tailpipe socks <addrblob> curl http://server.tailpipe:8081/
+
+Flags:
+
 `)
+	flag.PrintDefaults()
 	os.Exit(1)
 }
 
@@ -115,6 +123,8 @@ func main() {
 		return
 	}
 	switch args[0] {
+	case "ping":
+		clientPingMode(logf)
 	case "socks":
 		clientSOCKSMode(logf)
 	case "ssh":
@@ -178,6 +188,29 @@ func clientKey() key.NodePrivate {
 		log.Fatalf("failed to parse %v: %v", path, err)
 	}
 	return conf.Private
+}
+
+func clientPingMode(logf logger.Logf) {
+	args := flag.Args()
+	args = args[1:] // trim "ping"
+	if len(args) == 0 {
+		usage("tailpipe ping <addrblob>")
+	}
+	priv := clientKey()
+	cl, err := derpcat.NewClient(logf, derpcat.ConnBlob(args[0]), priv)
+	if err != nil {
+		log.Fatalf("NewClient: %v", err)
+	}
+	defer cl.Close()
+	if err := cl.Start(); err != nil {
+		log.Fatalf("Start: %v", err)
+	}
+	ctx := context.Background()
+	res, err := cl.Ping(ctx)
+	if err != nil {
+		log.Fatalf("Ping: %v", err)
+	}
+	fmt.Printf("pong in %v\n", res.Latency)
 }
 
 func clientMode(logf logger.Logf, connStr, optDest string) {
@@ -260,7 +293,7 @@ func clientMode(logf logger.Logf, connStr, optDest string) {
 func clientSOCKSMode(logf logger.Logf) {
 	args := flag.Args() // "socks", <derpaddr>, <cmd>, [args...]
 	if len(args) < 3 {
-		usage("derp socks <derpaddr> <cmd> [args...]")
+		usage("tailpipe socks <addrblob> <cmd> [args...]")
 	}
 	progArgs := args[2:]
 
@@ -315,7 +348,7 @@ func clientSOCKSMode(logf logger.Logf) {
 func clientParseMode(logf logger.Logf) {
 	args := flag.Args()
 	if len(args) != 2 {
-		usage("derp parse <derpaddr>")
+		usage("tailpipe parse <addrblob>")
 	}
 	dst := args[1]
 	ci, err := derpcat.ParseConnBlob(derpcat.ConnBlob(dst))
@@ -466,8 +499,17 @@ func server(logf logger.Logf) {
 		json.NewEncoder(os.Stdout).Encode(map[string]string{"listenAddr": string(connStr)})
 	}
 	if v := os.Getenv("DC_ADDR_FILE"); v != "" {
-		if err := os.WriteFile(v, []byte(connStr), 0600); err != nil {
-			log.Fatal(err)
+		if tcpAddr, ok := strings.CutPrefix(v, "tcp:"); ok {
+			c, err := net.Dial("tcp", tcpAddr)
+			if err != nil {
+				log.Fatalf("DC_ADDR_FILE tcp dial %q: %v", tcpAddr, err)
+			}
+			fmt.Fprintln(c, connStr)
+			c.Close()
+		} else {
+			if err := os.WriteFile(v, []byte(connStr), 0600); err != nil {
+				log.Fatal(err)
+			}
 		}
 	}
 
@@ -613,7 +655,7 @@ func genKey() {
 	switch len(fs.Args()) {
 	case 0:
 	default:
-		fmt.Fprintf(os.Stderr, "derp genkey [-name=<name>] [-force] [name]\n")
+		fmt.Fprintf(os.Stderr, "tailpipe genkey [-name=<name>] [-force] [name]\n")
 		os.Exit(1)
 	}
 
