@@ -3,36 +3,412 @@
 package derpcat
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
 	"net"
 	"os"
+	"os/exec"
+	"os/user"
 	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 
-	"golang.org/x/crypto/ssh"
-	"tailscale.com/ipn/ipnlocal"
-	"tailscale.com/ssh/tailssh"
+	"github.com/creack/pty"
+	"github.com/u-root/u-root/pkg/termios"
+	gossh "golang.org/x/crypto/ssh"
+	"golang.org/x/sys/unix"
+	"tailscale.com/tempfork/gliderlabs/ssh"
 )
 
 func (b *locoBackend) ShouldRunSSH() bool { return true }
 
 func (s *Server) HandleTailscaleSSHConn(c net.Conn) {
-	h := tailssh.DCTP.NewServer(s.lb.logf, s.lb)
-	if err := h(c); err != nil {
-		s.lb.logf("HandleTailscaleSSHConn: %v", err)
+	keys, err := getHostKeys()
+	if err != nil {
+		s.lb.logf("SSH host keys: %v", err)
 		c.Close()
 		return
 	}
+	srv := &ssh.Server{
+		Handler:             sessionHandler,
+		NoClientAuthHandler: func(ctx ssh.Context) error { return nil },
+		ChannelHandlers:     map[string]ssh.ChannelHandler{"session": ssh.DefaultSessionHandler},
+		RequestHandlers:     map[string]ssh.RequestHandler{},
+		SubsystemHandlers:   map[string]ssh.SubsystemHandler{},
+	}
+	for _, k := range keys {
+		srv.AddHostKey(k)
+	}
+	srv.HandleConn(c)
 }
 
-func (b *locoBackend) GetSSH_HostKeys() (ret []ssh.Signer, err error) {
-	conf, err := os.UserConfigDir()
+// sessionHandler handles a single SSH session (shell or exec).
+func sessionHandler(sess ssh.Session) {
+	u, err := user.Current()
+	if err != nil {
+		fmt.Fprintf(sess.Stderr(), "failed to get current user: %v\r\n", err)
+		sess.Exit(1)
+		return
+	}
+
+	shell := loginShell(u)
+	rawCmd := sess.RawCommand()
+
+	var args []string
+	if rawCmd == "" {
+		args = []string{shell, "-l"}
+	} else {
+		args = []string{shell, "-c", rawCmd}
+	}
+
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Dir = u.HomeDir
+
+	cmd.Env = []string{
+		"SHELL=" + shell,
+		"USER=" + u.Username,
+		"HOME=" + u.HomeDir,
+		"PATH=" + defaultPath(u),
+	}
+	for _, env := range sess.Environ() {
+		if acceptEnvPair(env) {
+			cmd.Env = append(cmd.Env, env)
+		}
+	}
+
+	ptyReq, winCh, isPTY := sess.Pty()
+	if isPTY {
+		sess.DisablePTYEmulation()
+		runWithPTY(sess, cmd, ptyReq, winCh)
+	} else {
+		runWithPipes(sess, cmd)
+	}
+}
+
+// runWithPTY runs cmd attached to a pseudo-terminal.
+func runWithPTY(sess ssh.Session, cmd *exec.Cmd, ptyReq ssh.Pty, winCh <-chan ssh.Window) {
+	ptmx, tty, err := pty.Open()
+	if err != nil {
+		fmt.Fprintf(sess.Stderr(), "pty open: %v\r\n", err)
+		sess.Exit(1)
+		return
+	}
+	defer ptmx.Close()
+	defer tty.Close()
+
+	// Configure terminal modes from the SSH request.
+	if rc, err := tty.SyscallConn(); err == nil {
+		rc.Control(func(fd uintptr) {
+			tios, err := termios.GTTY(int(fd))
+			if err != nil {
+				return
+			}
+			tios.Row = int(ptyReq.Window.Height)
+			tios.Col = int(ptyReq.Window.Width)
+			for c, v := range ptyReq.Modes {
+				if c == gossh.TTY_OP_ISPEED {
+					tios.Ispeed = int(v)
+					continue
+				}
+				if c == gossh.TTY_OP_OSPEED {
+					tios.Ospeed = int(v)
+					continue
+				}
+				k, ok := opcodeShortName[c]
+				if !ok {
+					continue
+				}
+				if _, ok := tios.CC[k]; ok {
+					tios.CC[k] = uint8(v)
+					continue
+				}
+				if _, ok := tios.Opts[k]; ok {
+					tios.Opts[k] = v > 0
+					continue
+				}
+			}
+			tios.STTY(int(fd))
+		})
+	}
+
+	if ptyReq.Term != "" {
+		cmd.Env = append(cmd.Env, "TERM="+ptyReq.Term)
+	}
+
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setctty: true,
+		Setsid:  true,
+	}
+	cmd.Stdin = tty
+	cmd.Stdout = tty
+	cmd.Stderr = tty
+
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(sess.Stderr(), "start: %v\r\n", err)
+		sess.Exit(1)
+		return
+	}
+	tty.Close() // child owns the tty now
+
+	// Handle window size changes.
+	go func() {
+		for win := range winCh {
+			unix.IoctlSetWinsize(int(ptmx.Fd()), syscall.TIOCSWINSZ, &unix.Winsize{
+				Row:    uint16(win.Height),
+				Col:    uint16(win.Width),
+				Xpixel: uint16(win.WidthPixels),
+				Ypixel: uint16(win.HeightPixels),
+			})
+		}
+	}()
+
+	// I/O: session ↔ pty master.
+	go func() {
+		io.Copy(ptmx, sess) // stdin
+	}()
+	io.Copy(sess, ptmx) // stdout (blocks until pty closes)
+
+	if err := cmd.Wait(); err != nil {
+		sess.Exit(exitCode(err))
+		return
+	}
+	sess.Exit(0)
+}
+
+// runWithPipes runs cmd with stdin/stdout/stderr pipes (no PTY).
+func runWithPipes(sess ssh.Session, cmd *exec.Cmd) {
+	stdinPipe, err := cmd.StdinPipe()
+	if err != nil {
+		fmt.Fprintf(sess.Stderr(), "stdin pipe: %v\r\n", err)
+		sess.Exit(1)
+		return
+	}
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		fmt.Fprintf(sess.Stderr(), "stdout pipe: %v\r\n", err)
+		sess.Exit(1)
+		return
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		fmt.Fprintf(sess.Stderr(), "stderr pipe: %v\r\n", err)
+		sess.Exit(1)
+		return
+	}
+
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(sess.Stderr(), "start: %v\r\n", err)
+		sess.Exit(1)
+		return
+	}
+
+	var processDone atomic.Bool
+	go func() {
+		defer stdinPipe.Close()
+		io.Copy(stdinPipe, sess)
+	}()
+
+	outputDone := make(chan struct{})
+	var openStreams atomic.Int32
+	openStreams.Store(2) // stdout + stderr
+	closeOutput := func() {
+		if openStreams.Add(-1) == 0 {
+			close(outputDone)
+		}
+	}
+	go func() {
+		defer closeOutput()
+		io.Copy(sess, stdoutPipe)
+	}()
+	go func() {
+		defer closeOutput()
+		io.Copy(sess.Stderr(), stderrPipe)
+	}()
+
+	err = cmd.Wait()
+	processDone.Store(true)
+	<-outputDone
+
+	if err != nil {
+		sess.Exit(exitCode(err))
+		return
+	}
+	sess.Exit(0)
+}
+
+// exitCode extracts the exit code from an exec error.
+func exitCode(err error) int {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
+	}
+	return 1
+}
+
+// acceptEnvPair reports whether the environment variable key=value pair
+// should be accepted from the client (same default as OpenSSH AcceptEnv).
+func acceptEnvPair(kv string) bool {
+	k, _, ok := strings.Cut(kv, "=")
+	if !ok {
+		return false
+	}
+	return k == "TERM" || k == "LANG" || strings.HasPrefix(k, "LC_")
+}
+
+// loginShell returns the user's login shell.
+func loginShell(u *user.User) string {
+	switch runtime.GOOS {
+	case "darwin":
+		out, err := exec.Command("dscl", ".", "-read", filepath.Join("/Users", u.Username), "UserShell").Output()
+		if err == nil {
+			if s, ok := strings.CutPrefix(string(out), "UserShell: "); ok {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	if e := os.Getenv("SHELL"); e != "" {
+		return e
+	}
+	return "/bin/sh"
+}
+
+// defaultPath returns the default PATH for the given user.
+func defaultPath(u *user.User) string {
+	if u.Uid == "0" {
+		return "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	}
+	return "/usr/local/bin:/usr/bin:/bin"
+}
+
+// --- Host key management ---
+
+var (
+	hostKeyMu sync.Mutex
+)
+
+// getHostKeys returns the SSH host key signers, generating an ed25519 key
+// in ~/.config/tailpipe/ssh/ if one doesn't exist.
+func getHostKeys() ([]gossh.Signer, error) {
+	dir, err := sshKeyDir()
 	if err != nil {
 		return nil, err
 	}
-	varRoot := filepath.Join(conf, "derpcat-server")
-	if err := os.MkdirAll(varRoot, 0700); err != nil {
+	keyPEM, err := hostKeyFileOrCreate(dir)
+	if err != nil {
 		return nil, err
 	}
-	var lb ipnlocal.LocalBackend
-	lb.SetVarRoot(varRoot)
-	return lb.GetSSH_HostKeys()
+	signer, err := gossh.ParsePrivateKey(keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("parsing host key: %w", err)
+	}
+	return []gossh.Signer{signer}, nil
+}
+
+func sshKeyDir() (string, error) {
+	cfgDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("UserConfigDir: %w", err)
+	}
+	dir := filepath.Join(cfgDir, "tailpipe", "ssh")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+func hostKeyFileOrCreate(keyDir string) ([]byte, error) {
+	hostKeyMu.Lock()
+	defer hostKeyMu.Unlock()
+
+	path := filepath.Join(keyDir, "ssh_host_ed25519_key")
+	v, err := os.ReadFile(path)
+	if err == nil {
+		return v, nil
+	}
+	if !os.IsNotExist(err) {
+		return nil, err
+	}
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	mk, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return nil, err
+	}
+	pemData := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: mk})
+	if err := os.WriteFile(path, pemData, 0600); err != nil {
+		return nil, err
+	}
+	return pemData, nil
+}
+
+// opcodeShortName maps SSH terminal mode opcodes to mnemonic names
+// expected by the termios package.
+var opcodeShortName = map[uint8]string{
+	gossh.VINTR:         "intr",
+	gossh.VQUIT:         "quit",
+	gossh.VERASE:        "erase",
+	gossh.VKILL:         "kill",
+	gossh.VEOF:          "eof",
+	gossh.VEOL:          "eol",
+	gossh.VEOL2:         "eol2",
+	gossh.VSTART:        "start",
+	gossh.VSTOP:         "stop",
+	gossh.VSUSP:         "susp",
+	gossh.VDSUSP:        "dsusp",
+	gossh.VREPRINT:      "rprnt",
+	gossh.VWERASE:       "werase",
+	gossh.VLNEXT:        "lnext",
+	gossh.VFLUSH:        "flush",
+	gossh.VSWTCH:        "swtch",
+	gossh.VSTATUS:       "status",
+	gossh.VDISCARD:      "discard",
+	gossh.IGNPAR:        "ignpar",
+	gossh.PARMRK:        "parmrk",
+	gossh.INPCK:         "inpck",
+	gossh.ISTRIP:        "istrip",
+	gossh.INLCR:         "inlcr",
+	gossh.IGNCR:         "igncr",
+	gossh.ICRNL:         "icrnl",
+	gossh.IUCLC:         "iuclc",
+	gossh.IXON:          "ixon",
+	gossh.IXANY:         "ixany",
+	gossh.IXOFF:         "ixoff",
+	gossh.IMAXBEL:       "imaxbel",
+	gossh.IUTF8:         "iutf8",
+	gossh.ISIG:          "isig",
+	gossh.ICANON:        "icanon",
+	gossh.XCASE:         "xcase",
+	gossh.ECHO:          "echo",
+	gossh.ECHOE:         "echoe",
+	gossh.ECHOK:         "echok",
+	gossh.ECHONL:        "echonl",
+	gossh.NOFLSH:        "noflsh",
+	gossh.TOSTOP:        "tostop",
+	gossh.IEXTEN:        "iexten",
+	gossh.ECHOCTL:       "echoctl",
+	gossh.ECHOKE:        "echoke",
+	gossh.PENDIN:        "pendin",
+	gossh.OPOST:         "opost",
+	gossh.OLCUC:         "olcuc",
+	gossh.ONLCR:         "onlcr",
+	gossh.OCRNL:         "ocrnl",
+	gossh.ONOCR:         "onocr",
+	gossh.ONLRET:        "onlret",
+	gossh.CS7:           "cs7",
+	gossh.CS8:           "cs8",
+	gossh.PARENB:        "parenb",
+	gossh.PARODD:        "parodd",
+	gossh.TTY_OP_ISPEED: "tty_op_ispeed",
+	gossh.TTY_OP_OSPEED: "tty_op_ospeed",
 }

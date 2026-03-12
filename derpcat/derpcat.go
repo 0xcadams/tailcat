@@ -22,7 +22,6 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	go4mem "go4.org/mem"
-	"tailscale.com/disco"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
@@ -123,9 +122,9 @@ type locoBackend struct {
 	serverPub  key.NodePublic // non-zero if we're a client (server's public key)
 	isServer   bool
 
-	// discoMessageHook is called when a disco message is received.
-	// Set before createEngine.
-	discoMessageHook func(dm disco.Message, sender key.DiscoPublic, src key.NodePublic) bool
+	// onDERPRecv is called for non-disco DERP packets before the
+	// peer map lookup. Set before createEngine.
+	onDERPRecv func(regionID int, src key.NodePublic, pkt []byte) bool
 
 	mu             sync.Mutex
 	clients        map[key.NodePublic]*tailcfg.Node // for the server
@@ -219,15 +218,17 @@ func NewServer(priv key.NodePrivate, logf logger.Logf, regs ...*tailcfg.DERPRegi
 	sys.Set(store)
 
 	lb.isServer = true
-	lb.discoMessageHook = func(dm disco.Message, sender key.DiscoPublic, src key.NodePublic) bool {
-		switch dm.(type) {
-		case *MeowPing:
-			go lb.onMeow(src, sender)
+	lb.onDERPRecv = func(regionID int, src key.NodePublic, pkt []byte) bool {
+		if !IsMeowPacket(pkt) {
+			return false
+		}
+		if IsMeowedPacket(pkt) {
+			return true // server ignores meowed
+		}
+		if _, discoPub, ok := ParseMeowPing(pkt); ok {
+			go lb.onMeow(src, discoPub)
 			mc := lb.sys.MagicSock.Get()
-			derpRegion := lb.derpRegionID()
-			go mc.SendDiscoMessageOverDERP(sender, src, derpRegion, &Meowed{})
-			return true
-		case *Meowed:
+			go mc.SendDERPPacketTo(src, regionID, EncodeMeowed())
 			return true
 		}
 		return false
@@ -531,16 +532,13 @@ func (lb *locoBackend) Start() error {
 	if lb.serverPub.IsZero() {
 		nm.SSHPolicy = lb.sshPolicy()
 		// We're the server. (hence the serverPub is zero)
-		discoPriv := nodePrivateAsDiscoPrivate(lb.priv)
-		mc.SetDiscoKey(discoPriv)
-
 		nm.SelfNode = (&tailcfg.Node{
 			ID:         1,
 			StableID:   "1",
 			Name:       "server.derpcat.",
 			User:       100,
 			Key:        lb.pub,
-			DiscoKey:   discoPriv.Public(),
+			DiscoKey:   mc.DiscoPublicKey(),
 			Addresses:  []netip.Prefix{lb.addrPrefix},
 			AllowedIPs: []netip.Prefix{lb.addrPrefix, allIPv6},
 			HomeDERP:   derpRegion,
@@ -732,10 +730,12 @@ func createEngine(logf logger.Logf, lb *locoBackend) (err error) {
 		Metrics:       sys.UserMetricsRegistry(),
 		HealthTracker: sys.HealthTracker.Get(),
 		EventBus:      sys.Bus.Get(),
-		AcceptDiscoFromUnknownPeer: func(sender key.DiscoPublic) bool {
-			return lb.isServer
-		},
-		DiscoMessageHook: lb.discoMessageHook,
+		OnDERPRecv:    lb.onDERPRecv,
+	}
+	if lb.isServer {
+		// The server forces its disco key to be derived from its node key
+		// so clients can predict it from the ConnBlob without extra round trips.
+		conf.ForceDiscoKey = nodePrivateAsDiscoPrivate(lb.priv)
 	}
 	netns.SetEnabled(false)
 	e, err := wgengine.NewUserspaceEngine(logf, conf)
@@ -799,15 +799,15 @@ func NewClient(logf logger.Logf, server ConnBlob, priv key.NodePrivate) (*Client
 
 	meowWait := make(chan struct{})
 	onMeowed := sync.OnceFunc(func() { close(meowWait) })
-	lb.discoMessageHook = func(dm disco.Message, sender key.DiscoPublic, src key.NodePublic) bool {
-		switch dm.(type) {
-		case *Meowed:
+	lb.onDERPRecv = func(regionID int, src key.NodePublic, pkt []byte) bool {
+		if !IsMeowPacket(pkt) {
+			return false
+		}
+		if IsMeowedPacket(pkt) {
 			go onMeowed()
 			return true
-		case *MeowPing:
-			return true // client ignores MeowPing
 		}
-		return false
+		return true // client ignores MeowPing
 	}
 
 	if err := createEngine(logf, lb); err != nil {
@@ -866,13 +866,10 @@ func (c *Client) Ping(ctx context.Context) (PingResult, error) {
 	mc := c.lb.sys.MagicSock.Get()
 
 	dstNode := c.ci.ServerPublic.NodePublic
-	dstDisco := nodePublicAsDiscoPublic(dstNode)
 	derpRegion := c.lb.derpRegionID()
-	msg := &MeowPing{
-		NodeKey: c.lb.pub,
-	}
+	pkt := EncodeMeowPing(c.lb.pub, mc.DiscoPublicKey())
 
-	sent, err := mc.SendDiscoMessageOverDERP(dstDisco, dstNode, derpRegion, msg)
+	sent, err := mc.SendDERPPacketTo(dstNode, derpRegion, pkt)
 	if err != nil {
 		return zero, fmt.Errorf("sending meow: %w", err)
 	}
@@ -908,8 +905,7 @@ func (c *Client) DialTCP(ctx context.Context, ap netip.AddrPort) (net.Conn, erro
 		copy(a[12:], a4[:])
 		ap = netip.AddrPortFrom(netip.AddrFrom16(a), ap.Port())
 	}
-	ns := c.lb.sys.Netstack.Get()
-	return ns.DialContextTCP(ctx, ap)
+	return c.lb.ns.DialContextTCP(ctx, ap)
 }
 
 func pfxOf(a netip.Addr) netip.Prefix {

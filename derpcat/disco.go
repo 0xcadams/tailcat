@@ -1,72 +1,64 @@
 package derpcat
 
 import (
-	"errors"
-
 	"go4.org/mem"
-	"tailscale.com/disco"
 	"tailscale.com/types/key"
 )
 
-var errShort = errors.New("short message")
+// Meow messages are sent as raw DERP packets (not disco-framed).
+// They are identified by a 4-byte magic prefix, followed by a 1-byte
+// message type and the message payload.
+
+// meowMagic is the 4-byte prefix for all meow DERP packets.
+// It's distinct from WireGuard message types (1-4) and
+// disco's "TS💬" magic.
+var meowMagic = [4]byte{'m', 'e', 'o', 'w'}
 
 const (
-	TypeMeow   = disco.MessageType(0x0a)
-	TypeMeowed = disco.MessageType(0x0b)
+	meowTypePing  = 0x01 // client → server
+	meowTypePoned = 0x02 // server → client ("meowed")
 )
 
-// MeowPing is a "meow" discovery message sent by a derpcat client to a
-// derpcat server to announce itself. The server registers the client's
-// node key and replies with a Meowed.
-type MeowPing struct {
-	TxID    [12]byte
-	NodeKey key.NodePublic
+// IsMeowPacket reports whether pkt starts with the meow magic prefix.
+func IsMeowPacket(pkt []byte) bool {
+	return len(pkt) >= 4 && [4]byte(pkt[:4]) == meowMagic
 }
 
-func (m *MeowPing) AppendMarshal(b []byte) []byte {
-	ret, d := appendMsgHeader(b, TypeMeow, 0, 12+key.NodePublicRawLen)
-	copy(d, m.TxID[:])
-	m.NodeKey.AppendTo(d[:12])
-	return ret
+// EncodeMeowPing encodes a meow ping packet containing the sender's
+// node public key and disco public key.
+func EncodeMeowPing(nodeKey key.NodePublic, discoKey key.DiscoPublic) []byte {
+	b := make([]byte, 0, 4+1+key.NodePublicRawLen+key.DiscoPublicRawLen)
+	b = append(b, meowMagic[:]...)
+	b = append(b, meowTypePing)
+	b = nodeKey.AppendTo(b)
+	b = discoKey.AppendTo(b)
+	return b
 }
 
-func parseMeow(ver uint8, p []byte) (*MeowPing, error) {
-	if len(p) < 12+key.NodePublicRawLen {
-		return nil, errShort
+// EncodeMeowed encodes a meowed (acknowledgment) packet.
+func EncodeMeowed() []byte {
+	b := make([]byte, 0, 4+1)
+	b = append(b, meowMagic[:]...)
+	b = append(b, meowTypePoned)
+	return b
+}
+
+// ParseMeowPing parses a meow ping packet, returning the sender's
+// node public key and disco public key. The pkt must have already
+// been verified with IsMeowPacket.
+func ParseMeowPing(pkt []byte) (nodeKey key.NodePublic, discoKey key.DiscoPublic, ok bool) {
+	if len(pkt) < 4+1+key.NodePublicRawLen+key.DiscoPublicRawLen {
+		return nodeKey, discoKey, false
 	}
-	m := new(MeowPing)
-	copy(m.TxID[:], p)
-	m.NodeKey = key.NodePublicFromRaw32(mem.B(p[12 : 12+key.NodePublicRawLen]))
-	return m, nil
-}
-
-// Meowed is a response to a MeowPing, sent by a derpcat server to
-// confirm the client was added to the server's peer map.
-type Meowed struct{}
-
-func (m *Meowed) AppendMarshal(b []byte) []byte {
-	ret, _ := appendMsgHeader(b, TypeMeowed, 0, 0)
-	return ret
-}
-
-// appendMsgHeader is a copy of disco.appendMsgHeader.
-func appendMsgHeader(b []byte, t disco.MessageType, ver uint8, dataLen int) (all, data []byte) {
-	all = append(b, make([]byte, dataLen+2)...)
-	all[len(b)] = byte(t)
-	all[len(b)+1] = ver
-	data = all[len(b)+2:]
-	return
-}
-
-func init() {
-	disco.ParseHook = func(t disco.MessageType, ver uint8, p []byte) (disco.Message, error) {
-		switch t {
-		case TypeMeow:
-			return parseMeow(ver, p)
-		case TypeMeowed:
-			return &Meowed{}, nil
-		default:
-			return nil, nil
-		}
+	if pkt[4] != meowTypePing {
+		return nodeKey, discoKey, false
 	}
+	nodeKey = key.NodePublicFromRaw32(mem.B(pkt[5 : 5+key.NodePublicRawLen]))
+	discoKey = key.DiscoPublicFromRaw32(mem.B(pkt[5+key.NodePublicRawLen : 5+key.NodePublicRawLen+key.DiscoPublicRawLen]))
+	return nodeKey, discoKey, true
+}
+
+// IsMeowedPacket reports whether pkt is a meowed (acknowledgment) packet.
+func IsMeowedPacket(pkt []byte) bool {
+	return len(pkt) >= 5 && [4]byte(pkt[:4]) == meowMagic && pkt[4] == meowTypePoned
 }

@@ -8,10 +8,15 @@ require (
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745
 	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b
 	gvisor.dev/gvisor v0.0.0-20260224225140-573d5e7127a8
-	tailscale.com v1.97.0-pre.0.20260307231707-ea5aaeb32446 // @dctp branch
+	tailscale.com v1.97.0-pre.0.20260311233719-073a9a8c9ed4
 )
 
-require golang.org/x/crypto v0.46.0
+require (
+	github.com/creack/pty v1.1.24
+	github.com/u-root/u-root v0.14.0
+	golang.org/x/crypto v0.46.0
+	golang.org/x/sys v0.40.0
+)
 
 require (
 	9fans.net/go v0.0.8-0.20250307142834-96bdba94b63f // indirect
@@ -38,7 +43,6 @@ require (
 	github.com/coder/websocket v1.8.12 // indirect
 	github.com/coreos/go-iptables v0.7.1-0.20240112124308-65c67c9f46e6 // indirect
 	github.com/creachadair/msync v0.7.1 // indirect
-	github.com/creack/pty v1.1.24 // indirect
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa // indirect
 	github.com/dgryski/go-metro v0.0.0-20180109044635-280f6062b5bc // indirect
 	github.com/digitalocean/go-smbios v0.0.0-20180907143718-390a4f403a8e // indirect
@@ -82,7 +86,6 @@ require (
 	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6 // indirect
 	github.com/tailscale/wireguard-go v0.0.0-20250716170648-1d0488a3d7da // indirect
 	github.com/tailscale/xnet v0.0.0-20240729143630-8497ac4dab2e // indirect
-	github.com/u-root/u-root v0.14.0 // indirect
 	github.com/u-root/uio v0.0.0-20240224005618-d2acac8f3701 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
@@ -91,7 +94,6 @@ require (
 	golang.org/x/mod v0.31.0 // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/term v0.38.0 // indirect
 	golang.org/x/text v0.32.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
