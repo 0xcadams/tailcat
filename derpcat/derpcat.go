@@ -1,3 +1,25 @@
+// Package derpcat implements a control-plane-free network pipe built on
+// Tailscale's magicsock data plane and WireGuard. It is the library behind the
+// "tailpipe" command (cmd/tailpipe).
+//
+// A [Server] listens for incoming clients via a DERP relay. Clients discover
+// the server through a compact [ConnBlob] (connection blob) that encodes the
+// server's public key and DERP region. DERP is used only for the initial
+// bootstrap; once both sides learn each other's endpoints, Tailscale's
+// magicsock layer upgrades to a direct peer-to-peer UDP path whenever possible,
+// just like the normal Tailscale data plane. DERP remains available as a
+// fallback relay if a direct path cannot be established.
+//
+// Once connected, the two sides exchange arbitrary TCP traffic over the
+// WireGuard tunnel with no Tailscale account or coordination server required.
+// Optionally, the server can run an auth-free SSH server on port 22, providing
+// remote shell access over the tunnel.
+//
+// The name "derpcat" is a nod to the classic "netcat" tool, but with
+// Tailscale's DERP as the bootstrap mechanism.
+//
+// Using Tailscale's DERP servers is not required; you can run your own DERP
+// server and provide its region information in the ConnBlob.
 package derpcat
 
 import (
@@ -46,11 +68,17 @@ import (
 	"tailscale.com/wgengine/wgcfg"
 )
 
+// Verbose controls whether extra diagnostic logging is emitted during
+// DERP region auto-detection (netcheck).
 var Verbose = false
 
-// ConnBlob is the base64-encoded CBOR of [ConnInfo].
+// ConnBlob is a compact, URL-safe string that a server gives to clients so
+// they can connect. It is the "dc"-prefixed base64url encoding of CBOR-encoded
+// [ConnInfo]. A typical ConnBlob looks like "dcomFwWC…".
 type ConnBlob string
 
+// ConnInfo describes how to reach a server: its public key and which DERP
+// relay region to use. It is serialized into a [ConnBlob] for exchange.
 type ConnInfo struct {
 	ServerPublic NodePublic `cbor:"p"` // a key.NodePublic
 
@@ -77,19 +105,26 @@ type NodePublic struct {
 	key.NodePublic
 }
 
+// MarshalBinary implements encoding.BinaryMarshaler for CBOR serialization,
+// encoding the raw 32-byte key without the "nodekey:" text prefix.
 func (p NodePublic) MarshalBinary() ([]byte, error) {
 	return p.NodePublic.AppendTo(nil), nil
 }
 
+// UnmarshalBinary implements encoding.BinaryUnmarshaler for CBOR deserialization.
 func (p *NodePublic) UnmarshalBinary(x []byte) error {
 	p.NodePublic = key.NodePublicFromRaw32(go4mem.B(x))
 	return nil
 }
 
+// Equal reports whether a and b represent the same public key.
 func (a NodePublic) Equal(b NodePublic) bool {
 	return a == b
 }
 
+// PrivateKey is a node identity: a private key paired with the connection
+// info needed to reach this node. The DERP region in Public must be
+// populated by the caller before the key is usable.
 type PrivateKey struct {
 	Private key.NodePrivate
 	Public  ConnInfo
@@ -152,6 +187,13 @@ func (b *locoBackend) Close() error {
 	return nil
 }
 
+// Server listens for clients over a WireGuard tunnel relayed through DERP.
+// Incoming TCP connections are dispatched via [Server.OnTCP] (for connections
+// addressed to the server itself) and [Server.OnTCPForward] (for connections
+// the server relays to other addresses, acting as an exit node).
+//
+// Create one with [NewServer], configure the OnTCP/OnTCPForward callbacks,
+// then call [Server.Start].
 type Server struct {
 	lb *locoBackend
 
@@ -180,6 +222,10 @@ type Server struct {
 	OnTCPForward func(netip.AddrPort) (handler func(net.Conn))
 }
 
+// NewServer creates a new server with the given node private key, using the
+// provided DERP region as its relay. Exactly one DERPRegion must be provided.
+// After creating the server, set [Server.OnTCP] and/or [Server.OnTCPForward],
+// then call [Server.Start].
 func NewServer(priv key.NodePrivate, logf logger.Logf, regs ...*tailcfg.DERPRegion) (*Server, error) {
 	lb := newLocoBackend(priv)
 	srv := &Server{
@@ -282,9 +328,14 @@ func NewServer(priv key.NodePrivate, logf logger.Logf, regs ...*tailcfg.DERPRegi
 	return srv, nil
 }
 
+// Addr returns the server's IPv6 address derived from its public key.
 func (s *Server) Addr() netip.Addr { return s.lb.addr }
-func (s *Server) Start() error     { return s.lb.Start() }
-func (s *Server) Close() error     { return s.lb.Close() }
+
+// Start connects to the DERP relay and begins accepting clients.
+func (s *Server) Start() error { return s.lb.Start() }
+
+// Close shuts down the server, closing the WireGuard engine and DERP connections.
+func (s *Server) Close() error { return s.lb.Close() }
 
 // AddAllowedClient adds k as an allowed client.
 //
@@ -295,6 +346,9 @@ func (s *Server) AddAllowedClient(k key.NodePublic) {
 	mak.Set(&s.lb.allowedClients, k, true)
 }
 
+// ConnBlobForTest returns a [ConnBlob] that clients can use to connect to
+// this server. It includes the full DERP region so clients don't need to
+// fetch the DERP map from the network.
 func (s *Server) ConnBlobForTest() ConnBlob {
 	return s.lb.ConnBlobForTest()
 }
@@ -333,6 +387,9 @@ func (lb *locoBackend) ConnBlobForTest() ConnBlob {
 	return ci.ConnBlob()
 }
 
+// ConnBlob serializes the ConnInfo into a compact [ConnBlob] string.
+// Some fields (RegionID, RegionCode, implicit HostNames) are zeroed before
+// encoding to reduce size; [ParseConnBlob] restores them.
 func (ci *ConnInfo) ConnBlob() ConnBlob {
 	// Clone the DERPRegions (and their nodes) and mutate them to
 	// zero out some fields before marshalling to save some space
@@ -367,6 +424,9 @@ func (ci *ConnInfo) ConnBlob() ConnBlob {
 	return "dc" + ConnBlob(base64.RawURLEncoding.EncodeToString(x))
 }
 
+// ParseConnBlob decodes a [ConnBlob] back into a [ConnInfo], restoring
+// fields that were stripped during encoding (RegionID, RegionCode, implicit
+// Tailscale DERP hostnames).
 func ParseConnBlob(cb ConnBlob) (ConnInfo, error) {
 	var zero ConnInfo
 	rest, ok := strings.CutPrefix(string(cb), "dc")
@@ -400,6 +460,10 @@ func ParseConnBlob(cb ConnBlob) (ConnInfo, error) {
 	return ci, nil
 }
 
+// Expand populates ci.Region from the network if only ci.RegionID was set.
+// If ci.Region is already populated, Expand is a no-op. When RegionID is -1,
+// the best region is selected automatically via netcheck latency probes.
+// The forServer flag adds a header hint to the DERP map fetch request.
 func (ci *ConnInfo) Expand(ctx context.Context, forServer bool) error {
 	for _, r := range ci.Region {
 		if r.RegionID == 0 {
@@ -749,6 +813,10 @@ func createEngine(logf logger.Logf, lb *locoBackend) (err error) {
 	return nil
 }
 
+// Client connects to a [Server] over a WireGuard tunnel relayed through DERP.
+// After creating a Client with [NewClient] and calling [Client.Start], use
+// [Client.Ping] to perform the meow handshake, then [Client.DialTCPPort] or
+// [Client.DialTCP] to open TCP connections to the server.
 type Client struct {
 	lb       *locoBackend
 	ci       ConnInfo      // of server
@@ -757,6 +825,9 @@ type Client struct {
 	serverAddr netip.Addr
 }
 
+// NewClient creates a client that will connect to the server identified by the
+// given [ConnBlob]. The priv key is the client's own node identity. Call
+// [Client.Start] and then [Client.Ping] to establish the tunnel.
 func NewClient(logf logger.Logf, server ConnBlob, priv key.NodePrivate) (*Client, error) {
 	ci, err := ParseConnBlob(server)
 	if err != nil {
@@ -846,17 +917,30 @@ func NewClient(logf logger.Logf, server ConnBlob, priv key.NodePrivate) (*Client
 	}, nil
 }
 
+// PublicKey returns the client's node public key.
 func (c *Client) PublicKey() key.NodePublic { return c.lb.pub }
-func (c *Client) Close() error              { return c.lb.Close() }
 
+// Close shuts down the client, closing the WireGuard engine and DERP connections.
+func (c *Client) Close() error { return c.lb.Close() }
+
+// PingResult is the result of a successful [Client.Ping] call.
 type PingResult struct {
+	// Latency is the round-trip time for the meow/meowed handshake
+	// through the DERP relay.
 	Latency time.Duration
 }
 
+// Start connects to the DERP relay and configures WireGuard. After Start
+// returns, call [Client.Ping] to perform the meow handshake with the server.
 func (c *Client) Start() error {
 	return c.lb.Start()
 }
 
+// Ping sends a meow ping to the server via DERP and waits for the meowed
+// acknowledgment. This must be called at least once after [Client.Start] to
+// establish the WireGuard tunnel; subsequent calls are no-ops because the
+// meowWait channel is already closed. The internal timeout is 10 seconds
+// regardless of ctx.
 func (c *Client) Ping(ctx context.Context) (PingResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -885,10 +969,13 @@ func (c *Client) Ping(ctx context.Context) (PingResult, error) {
 	}
 }
 
+// Dial opens a connection to the given network/address through the server's
+// WireGuard tunnel. The address is resolved relative to the server.
 func (c *Client) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
 	return c.lb.sys.Dialer.Get().UserDial(ctx, network, addr)
 }
 
+// DialTCPPort opens a TCP connection to the given port on the server.
 func (c *Client) DialTCPPort(ctx context.Context, port uint16) (net.Conn, error) {
 	return c.lb.sys.Dialer.Get().UserDial(ctx, "tcp", net.JoinHostPort(c.serverAddr.String(), fmt.Sprint(port)))
 }
@@ -898,6 +985,10 @@ var (
 	nat64PrefixBytes = nat64Prefix.Addr().As16()
 )
 
+// DialTCP opens a TCP connection to an arbitrary IP:port through the server,
+// which must be configured as an exit node (see [Server.OnTCPForward]).
+// IPv4 addresses are mapped into the NAT64 prefix (64:ff9b::/96) for
+// transport over the IPv6-only WireGuard tunnel.
 func (c *Client) DialTCP(ctx context.Context, ap netip.AddrPort) (net.Conn, error) {
 	if ap.Addr().Is4() {
 		a := nat64PrefixBytes
@@ -912,6 +1003,7 @@ func pfxOf(a netip.Addr) netip.Prefix {
 	return netip.PrefixFrom(a, a.BitLen())
 }
 
+// Status returns the current WireGuard and DERP connection status.
 func (s *Server) Status() *ipnstate.Status {
 	return s.lb.Status()
 }
@@ -935,9 +1027,7 @@ func (b *locoBackend) NodeKey() key.NodePublic {
 }
 
 func (b *locoBackend) TailscaleVarRoot() string {
-	// only needed by tailssh.sshSession for recording
-	// SSH sessions which isn't enabled.
-	panic("unused")
+	panic("unused") // only needed by upstream tailssh for session recording
 }
 
 func (b *locoBackend) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
@@ -965,12 +1055,6 @@ func (b *locoBackend) sshPolicy() *tailcfg.SSHPolicy {
 			},
 		},
 	}
-}
-
-// CanRunSSHServer reports whether the platform supports running a Tailscale SSH
-// (auth-free) server.
-func (s *Server) CanRunSSHServer() bool {
-	return s.lb.ShouldRunSSH() // eh, reuse this method that ssh/tailssh needs of its ipnLocalBackend interface
 }
 
 // nodePrivateAsDiscoPrivate converts a NodePrivate to a DiscoPrivate by

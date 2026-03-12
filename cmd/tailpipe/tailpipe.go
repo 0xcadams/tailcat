@@ -25,11 +25,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tailscale/derpcat/derpcat"
 	"go4.org/mem"
 	xmaps "golang.org/x/exp/maps"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"tailscale.com/derp/derpserver"
-	"github.com/tailscale/derpcat/derpcat"
 	"tailscale.com/envknob"
 	"tailscale.com/net/socks5"
 	"tailscale.com/tailcfg"
@@ -421,7 +421,7 @@ func server(logf logger.Logf) {
 	if err != nil {
 		log.Fatalf("NewServer: %v", err)
 	}
-	if services.Contains("no-auth-ssh") && !s.CanRunSSHServer() {
+	if services.Contains("no-auth-ssh") && !derpcat.SupportsSSHServer() {
 		log.Fatalf("Tailscale SSH server not supported on %v", runtime.GOOS)
 	}
 	if *flagAllow != "" {

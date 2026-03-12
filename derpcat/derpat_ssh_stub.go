@@ -1,4 +1,4 @@
-//go:build !((linux || darwin) && !ts_omit_ssh)
+//go:build ts_omit_ssh || !(linux || darwin)
 
 package derpcat
 
@@ -8,7 +8,9 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-func (b *locoBackend) ShouldRunSSH() bool { return false }
+// SupportsSSHServer reports whether the platform supports running the built-in
+// auth-free SSH server.
+func SupportsSSHServer() bool { return false }
 
 func (s *Server) HandleTailscaleSSHConn(c net.Conn) {
 	c.Close()

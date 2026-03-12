@@ -28,8 +28,18 @@ import (
 	"tailscale.com/tempfork/gliderlabs/ssh"
 )
 
-func (b *locoBackend) ShouldRunSSH() bool { return true }
+// SupportsSSHServer reports whether the platform supports running the built-in
+// auth-free SSH server.
+func SupportsSSHServer() bool { return true }
 
+// HandleTailscaleSSHConn handles an incoming TCP connection as an SSH session.
+// Authentication is not required — the WireGuard tunnel provides identity.
+// The connection is served using the gliderlabs/ssh library with a single
+// ed25519 host key generated on first use in ~/.config/tailpipe/ssh/.
+//
+// Two modes are supported: if the SSH client sends a command, it is executed
+// via the user's shell with "-c"; otherwise an interactive login shell is
+// started with a PTY.
 func (s *Server) HandleTailscaleSSHConn(c net.Conn) {
 	keys, err := getHostKeys()
 	if err != nil {
@@ -288,12 +298,6 @@ func defaultPath(u *user.User) string {
 	return "/usr/local/bin:/usr/bin:/bin"
 }
 
-// --- Host key management ---
-
-var (
-	hostKeyMu sync.Mutex
-)
-
 // getHostKeys returns the SSH host key signers, generating an ed25519 key
 // in ~/.config/tailpipe/ssh/ if one doesn't exist.
 func getHostKeys() ([]gossh.Signer, error) {
@@ -323,6 +327,12 @@ func sshKeyDir() (string, error) {
 	}
 	return dir, nil
 }
+
+// hostKeyMu protects concurrent generation of host keys with
+// [getHostKeys], making sure two callers don't try to concurrently find
+// a missing key and generate it at the same time, returning different keys to
+// their callers.
+var hostKeyMu sync.Mutex
 
 func hostKeyFileOrCreate(keyDir string) ([]byte, error) {
 	hostKeyMu.Lock()
