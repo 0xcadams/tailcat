@@ -1,3 +1,6 @@
+// Copyright (c) Tailscale Inc & contributors
+// SPDX-License-Identifier: BSD-3-Clause
+
 // Package derpcat implements a control-plane-free network pipe built on
 // Tailscale's magicsock data plane and WireGuard. It is the library behind the
 // "tailpipe" command (cmd/tailpipe).
