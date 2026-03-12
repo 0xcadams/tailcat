@@ -5,6 +5,11 @@ encrypted tunnels between two machines using Tailscale's data plane
 (WireGuard, magicsock, DERP relays) without requiring a Tailscale
 account or any coordination server.
 
+The `tailpipe` CLI (in `cmd/tailpipe`) is built on the **derpcat** Go
+library (in the `derpcat` package). The module is named `derpcat` for
+historical reasons (a nod to [netcat](https://en.wikipedia.org/wiki/Netcat)) while the user-facing command is
+called Tailpipe.
+
 One side runs `tailpipe` to start a server and gets back a short
 connection token. The other side passes that token to `tailpipe` to
 connect. All traffic between the two is encrypted end-to-end with
