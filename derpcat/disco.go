@@ -18,8 +18,8 @@ import (
 var meowMagic = [4]byte{'m', 'e', 'o', 'w'}
 
 const (
-	meowTypePing  = 0x01 // client → server
-	meowTypePoned = 0x02 // server → client ("meowed")
+	meowTypePing = 0x01 // client → server
+	meowTypePong = 0x02 // server → client ("meowed")
 )
 
 // IsMeowPacket reports whether pkt starts with the meow magic prefix.
@@ -42,7 +42,7 @@ func EncodeMeowPing(nodeKey key.NodePublic, discoKey key.DiscoPublic) []byte {
 func EncodeMeowed() []byte {
 	b := make([]byte, 0, 4+1)
 	b = append(b, meowMagic[:]...)
-	b = append(b, meowTypePoned)
+	b = append(b, meowTypePong)
 	return b
 }
 
@@ -63,5 +63,5 @@ func ParseMeowPing(pkt []byte) (nodeKey key.NodePublic, discoKey key.DiscoPublic
 
 // IsMeowedPacket reports whether pkt is a meowed (acknowledgment) packet.
 func IsMeowedPacket(pkt []byte) bool {
-	return len(pkt) >= 5 && [4]byte(pkt[:4]) == meowMagic && pkt[4] == meowTypePoned
+	return len(pkt) >= 5 && [4]byte(pkt[:4]) == meowMagic && pkt[4] == meowTypePong
 }

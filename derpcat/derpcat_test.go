@@ -114,7 +114,7 @@ func TestConnBlob(t *testing.T) {
 	tests := []struct {
 		name string
 		ci   ConnInfo
-		want ConnBlob // if non-empty, check exact encoding
+		want ConnBlob  // if non-empty, check exact encoding
 		back *ConnInfo // if non-nil, round-tripped form we want
 	}{
 		{
