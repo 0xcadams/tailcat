@@ -47,6 +47,7 @@ func clientSSHMode(logf logger.Logf) {
 		"-o", "UpdateHostKeys no",
 		"-o", "StrictHostKeyChecking no",
 		"-o", "UserKnownHostsFile /dev/null",
+		"-o", "LogLevel ERROR",
 		"-o", fmt.Sprintf("ProxyCommand=%s --key=%q %s %s", exe, *flagKey, connBlobStr, portOrIPPort),
 		dst,
 	}
