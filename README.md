@@ -19,6 +19,24 @@ a direct peer-to-peer UDP connection when possible.
 
 No accounts, no login, no configuration files, no `sudo`.
 
+## Installation
+
+Ensure git uses SSH for GitHub (needed once):
+
+```sh
+git config --global url."git@github.com:".insteadOf "https://github.com/"
+```
+
+Then install:
+
+```sh
+GOPRIVATE=github.com/tailscale/derpcat go install github.com/tailscale/derpcat/cmd/tailpipe@latest
+```
+
+`GOPRIVATE` bypasses the public module proxy and checksum database
+(which can't access private repos), and the git URL rewrite makes Go
+fetch via SSH where your GitHub key provides authentication.
+
 ## Usage
 
 Pipe stdin/stdout between two machines:
