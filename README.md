@@ -1,17 +1,15 @@
-# Tailpipe
+# Tailcat
 
-Tailpipe is like netcat, but over WireGuard. It creates point-to-point
+Tailcat is like netcat, but over WireGuard. It creates point-to-point
 encrypted tunnels between two machines using Tailscale's data plane
 (WireGuard, magicsock, DERP relays) without requiring a Tailscale
 account or any coordination server.
 
-The `tailpipe` CLI (in `cmd/tailpipe`) is built on the **derpcat** Go
-library (in the `derpcat` package). The module is named `derpcat` for
-historical reasons (a nod to [netcat](https://en.wikipedia.org/wiki/Netcat)) while the user-facing command is
-called Tailpipe.
+The `tailcat` CLI (in `cmd/tailcat`) is built on the **tailcat** Go
+library (importable as `github.com/tailscale/tailcat`).
 
-One side runs `tailpipe` to start a server and gets back a short
-connection token. The other side passes that token to `tailpipe` to
+One side runs `tailcat` to start a server and gets back a short
+connection token. The other side passes that token to `tailcat` to
 connect. All traffic between the two is encrypted end-to-end with
 WireGuard. The initial connection bootstraps through Tailscale's DERP
 relay network, and then magicsock performs NAT traversal to upgrade to
@@ -30,7 +28,7 @@ git config --global url."git@github.com:".insteadOf "https://github.com/"
 Then install:
 
 ```sh
-GOPRIVATE=github.com/tailscale/derpcat go install github.com/tailscale/derpcat/cmd/tailpipe@latest
+GOPRIVATE=github.com/tailscale/tailcat go install github.com/tailscale/tailcat/cmd/tailcat@latest
 ```
 
 `GOPRIVATE` bypasses the public module proxy and checksum database
@@ -43,77 +41,77 @@ Pipe stdin/stdout between two machines:
 
 ```sh
 # Machine A (server): listen and print what the client sends
-tailpipe
+tailcat
 
 # Machine B (client): send "hello" to the server
-echo hello | tailpipe <token>
+echo hello | tailcat <token>
 ```
 
 Expose local ports through the tunnel:
 
 ```sh
 # Serve specific ports (forwarded to localhost)
-tailpipe --serve=8080,8443
+tailcat --serve=8080,8443
 
 # Serve all ports
-tailpipe --serve=all
+tailcat --serve=all
 
 # Client connects to a port
-curl --connect-to ::localhost:1234 http://server/ | tailpipe <token> 8080
+curl --connect-to ::localhost:1234 http://server/ | tailcat <token> 8080
 ```
 
 Run an auth-free Tailscale SSH server (Linux/macOS):
 
 ```sh
 # Server
-tailpipe --serve=no-auth-ssh
+tailcat --serve=no-auth-ssh
 
 # Client
-tailpipe ssh <token>
-tailpipe ssh <token> ls -la
+tailcat ssh <token>
+tailcat ssh <token> ls -la
 ```
 
 Ping to test connectivity:
 
 ```sh
-tailpipe ping <token>
+tailcat ping <token>
 ```
 
 Run a command through a SOCKS5 proxy routed over the tunnel:
 
 ```sh
-tailpipe socks <token> curl http://server.tailpipe:8081/
+tailcat socks <token> curl http://server.tailcat:8081/
 ```
 
 Act as an exit node so the client can reach the server's network:
 
 ```sh
-tailpipe --serve=exit-node
+tailcat --serve=exit-node
 ```
 
 Generate and save a persistent key (so the token stays stable across restarts):
 
 ```sh
-tailpipe genkey --region=nyc
-# prints the token; key saved to ~/.config/tailpipe/keys/default.private.json
+tailcat genkey --region=nyc
+# prints the token; key saved to ~/.config/tailcat/keys/default.private.json
 
 # later:
-tailpipe --key=default --serve=8080
+tailcat --key=default --serve=8080
 ```
 
 Tokens can also be published as DNS TXT records and looked up by name:
 
 ```sh
-# If example.com has a TXT record "tailpipe=dc..."
-tailpipe example.com 8080
+# If example.com has a TXT record "tailcat=tc..."
+tailcat example.com 8080
 ```
 
 ## How it works
 
 ### Connection tokens
 
-A Tailpipe server is identified by a **connection token** (called a
-ConnBlob internally). It looks like `dcXYZ...` and is a `"dc"` prefix
+A Tailcat server is identified by a **connection token** (called a
+ConnBlob internally). It looks like `tcXYZ...` and is a `"tc"` prefix
 followed by base64-encoded [CBOR](https://cbor.io/) containing:
 
 - The server's WireGuard public key (Curve25519, 32 bytes)
@@ -127,7 +125,7 @@ need to fetch the DERP map).
 
 ### Network stack
 
-Tailpipe reuses Tailscale's production networking components but
+Tailcat reuses Tailscale's production networking components but
 without the control plane. Internally it constructs a **locoBackend**
 ("loco" for local control, or Spanish) that wires together:
 
@@ -138,7 +136,7 @@ without the control plane. Internally it constructs a **locoBackend**
   over direct UDP and DERP relays. It handles STUN-based endpoint
   discovery and UDP hole-punching for NAT traversal.
 - **Netstack** (gVisor) -- a userspace TCP/IP stack that terminates
-  TCP connections inside the process. This is what lets Tailpipe
+  TCP connections inside the process. This is what lets Tailcat
   accept inbound connections and dial outbound ones without any OS
   network configuration.
 - **DERP relay** -- Tailscale's encrypted relay protocol, used as a

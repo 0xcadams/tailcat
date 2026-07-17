@@ -3,7 +3,7 @@
 
 //go:build ts_omit_ssh || !(linux || darwin)
 
-package derpcat
+package tailcat
 
 import (
 	"net"

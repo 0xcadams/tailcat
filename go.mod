@@ -1,4 +1,4 @@
-module github.com/tailscale/derpcat
+module github.com/tailscale/tailcat
 
 go 1.26.1
 

@@ -3,7 +3,7 @@
 
 //go:build (linux || darwin) && !ts_omit_ssh
 
-package derpcat_test
+package tailcat_test
 
 import (
 	"bytes"
@@ -14,17 +14,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tailscale/derpcat/derpcat"
+	"github.com/tailscale/tailcat"
 	gossh "golang.org/x/crypto/ssh"
 	"tailscale.com/tstest/integration"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
 
-// testSSHEnv holds the shared state for SSH tests: a derpcat server with SSH
+// testSSHEnv holds the shared state for SSH tests: a tailcat server with SSH
 // enabled and a connected client, all using a localhost DERP relay.
 type testSSHEnv struct {
-	client *derpcat.Client
+	client *tailcat.Client
 }
 
 func setupSSHEnv(t *testing.T) *testSSHEnv {
@@ -38,7 +38,7 @@ func setupSSHEnv(t *testing.T) *testSSHEnv {
 	if testing.Verbose() {
 		logf = t.Logf
 	}
-	srv, err := derpcat.NewServer(key.NewNode(), logf, region)
+	srv, err := tailcat.NewServer(key.NewNode(), logf, region)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
@@ -54,7 +54,7 @@ func setupSSHEnv(t *testing.T) *testSSHEnv {
 		t.Fatalf("Start: %v", err)
 	}
 
-	client, err := derpcat.NewClient(logf, srv.ConnBlobForTest(), key.NewNode())
+	client, err := tailcat.NewClient(logf, srv.ConnBlobForTest(), key.NewNode())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}

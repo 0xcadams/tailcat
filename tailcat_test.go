@@ -1,7 +1,7 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-package derpcat
+package tailcat
 
 import (
 	"context"
@@ -29,7 +29,7 @@ func mkLogger(t testing.TB, name string) logger.Logf {
 	}
 }
 
-func TestDERPCat(t *testing.T) {
+func TestTailcat(t *testing.T) {
 	dm := integration.RunDERPAndSTUN(t, mkLogger(t, "derpstun"), "127.0.0.1")
 	t.Logf("DERPMap: %v", logger.AsJSON(dm))
 
@@ -122,7 +122,7 @@ func TestConnBlob(t *testing.T) {
 			ci: ConnInfo{
 				ServerPublic: akey([32]byte{1: 1, 2: 2, 31: 31}),
 			},
-			want: "dcoWFwWCAAAQIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHw",
+			want: "tcoWFwWCAAAQIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHw",
 		},
 		{
 			name: "key_with_full_custom_region",
@@ -261,7 +261,7 @@ func TestConnBlob(t *testing.T) {
 				ServerPublic: akey([32]byte{1: 1, 2: 2, 31: 31}),
 				RegionID:     10,
 			},
-			want: "dcomFwWCAAAQIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH2FpCg",
+			want: "tcomFwWCAAAQIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH2FpCg",
 		},
 	}
 	for _, tt := range tests {

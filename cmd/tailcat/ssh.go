@@ -17,13 +17,13 @@ import (
 	"tailscale.com/types/logger"
 )
 
-const tailPipeSSHEnabled = true
+const tailCatSSHEnabled = true
 
 func clientSSHMode(logf logger.Logf) {
 	args := flag.Args()
 	args = args[1:] // trim off "ssh"
 	if len(args) == 0 {
-		usage("tailpipe ssh [-p <port|ip:port>] [user@]<addrblob> [command ...]")
+		usage("tailcat ssh [-p <port|ip:port>] [user@]<addrblob> [command ...]")
 	}
 
 	portOrIPPort := "22"

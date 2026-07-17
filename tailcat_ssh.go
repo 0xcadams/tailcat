@@ -3,7 +3,7 @@
 
 //go:build (linux || darwin) && !ts_omit_ssh
 
-package derpcat
+package tailcat
 
 import (
 	"crypto/ed25519"
@@ -38,7 +38,7 @@ func SupportsSSHServer() bool { return true }
 // HandleTailscaleSSHConn handles an incoming TCP connection as an SSH session.
 // Authentication is not required — the WireGuard tunnel provides identity.
 // The connection is served using the gliderlabs/ssh library with a single
-// ed25519 host key generated on first use in ~/.config/tailpipe/ssh/.
+// ed25519 host key generated on first use in ~/.config/tailcat/ssh/.
 //
 // Two modes are supported: if the SSH client sends a command, it is executed
 // via the user's shell with "-c"; otherwise an interactive login shell is
@@ -302,7 +302,7 @@ func defaultPath(u *user.User) string {
 }
 
 // getHostKeys returns the SSH host key signers, generating an ed25519 key
-// in ~/.config/tailpipe/ssh/ if one doesn't exist.
+// in ~/.config/tailcat/ssh/ if one doesn't exist.
 func getHostKeys() ([]gossh.Signer, error) {
 	dir, err := sshKeyDir()
 	if err != nil {
@@ -324,7 +324,7 @@ func sshKeyDir() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("UserConfigDir: %w", err)
 	}
-	dir := filepath.Join(cfgDir, "tailpipe", "ssh")
+	dir := filepath.Join(cfgDir, "tailcat", "ssh")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", err
 	}

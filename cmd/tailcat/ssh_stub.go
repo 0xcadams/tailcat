@@ -11,7 +11,7 @@ import (
 	"tailscale.com/types/logger"
 )
 
-const tailPipeSSHEnabled = false
+const tailCatSSHEnabled = false
 
 func clientSSHMode(logf logger.Logf) {
 	logf("ssh support not compiled in")

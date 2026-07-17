@@ -28,7 +28,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tailscale/derpcat/derpcat"
+	"github.com/tailscale/tailcat"
 	"go4.org/mem"
 	xmaps "golang.org/x/exp/maps"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
@@ -43,7 +43,7 @@ import (
 
 var (
 	flagServe   = flag.String("serve", "", "comma-separated list of port numbers, port ranges, or service names to serve. Service names are: 'all' (serve all ports), 'exit' (run an exit node for all addresses), 'no-auth-ssh' (auth-free SSH server). If empty, it listens only on port 0 and writes to stdout.")
-	flagKey     = flag.String("key", "", "'new' for an ephemeral one, '' for the 'default' key (if it exists), else a new key. Otherwise the path to a *.key.json or a name like 'foo' to read it from $CONFIG/tailpipe/keys/foo.key.json")
+	flagKey     = flag.String("key", "", "'new' for an ephemeral one, '' for the 'default' key (if it exists), else a new key. Otherwise the path to a *.key.json or a name like 'foo' to read it from $CONFIG/tailcat/keys/foo.key.json")
 	flagAllow   = flag.String("allow", "", "comma-separated list of public keys to allow access to the server")
 	flagVerbose = flag.Bool("verbose", false, "be verbose")
 	flagJSON    = flag.Bool("json", false, "in server mode, write {\"listenAddr\": ...} JSON to stdout")
@@ -57,47 +57,47 @@ func usage(err string) {
 
 Server mode, accept one connection (any port), write to stdout:
 
-	tailpipe
+	tailcat
 
 Server mode, given ports:
 
-	tailpipe --serve=22,80,443,8000-8999
+	tailcat --serve=22,80,443,8000-8999
 
 Server mode, all ports:
 
-	tailpipe --serve=all
+	tailcat --serve=all
 
 Server mode, certain ports and Tailscale SSH (auth without
 password or public key):
 
-	tailpipe --serve=80,no-auth-ssh
+	tailcat --serve=80,no-auth-ssh
 
 Client mode, to default port 0 for stdin/stdout pipe:
 
-	echo hello | tailpipe <addrblob>
+	echo hello | tailcat <addrblob>
 
 Client mode to an explicit port:
 
-	echo "GET / HTTP/1.1..." | tailpipe <addrblob> 80
+	echo "GET / HTTP/1.1..." | tailcat <addrblob> 80
 
 Client mode, ping:
 
-	tailpipe ping <addrblob>
+	tailcat ping <addrblob>
 
 Client mode, ssh:
 
-	tailpipe ssh <addrblob>
-	tailpipe ssh <addrblob> <command> [args...]
+	tailcat ssh <addrblob>
+	tailcat ssh <addrblob> <command> [args...]
 
 Client mode, ssh to specific IP:port via addrblob's exit node:
 
-	tailpipe ssh -p 10.0.0.1:22 <addrblob>
+	tailcat ssh -p 10.0.0.1:22 <addrblob>
 
 Client mode, run an ephemeral SOCKS5 proxy and pass its address
 as 'all_proxy' environment variable to a child process:
 
-	tailpipe socks <addrblob> <cmd> [args...]
-	tailpipe socks <addrblob> curl http://server.tailpipe:8081/
+	tailcat socks <addrblob> <cmd> [args...]
+	tailcat socks <addrblob> curl http://server.tailcat:8081/
 
 Flags:
 
@@ -110,7 +110,7 @@ func main() {
 	flag.Usage = func() { usage("") }
 	flag.Parse()
 	if *flagVerbose {
-		derpcat.Verbose = true
+		tailcat.Verbose = true
 	}
 	args := flag.Args()
 	serverMode := len(args) == 0 || *flagServe != ""
@@ -140,7 +140,7 @@ func main() {
 		fmt.Println(clientKey().Public().String())
 	default:
 		var addr string
-		if strings.HasPrefix(args[0], "dc") {
+		if strings.HasPrefix(args[0], "tc") {
 			addr = args[0]
 		} else if strings.Contains(args[0], ".") {
 			// Maybe it's a DNS name with a TXT record?
@@ -149,17 +149,17 @@ func main() {
 			defer cancel()
 			txts, err := r.LookupTXT(ctx, args[0])
 			if err != nil {
-				log.Fatalf("argument %q doesn't start with 'dc' and not a DNS name with a tailpipe TXT record: %v", args[0], err)
+				log.Fatalf("argument %q doesn't start with 'tc' and not a DNS name with a tailcat TXT record: %v", args[0], err)
 			}
 			for _, txt := range txts {
-				if suf, ok := strings.CutPrefix(txt, "tailpipe="); ok {
+				if suf, ok := strings.CutPrefix(txt, "tailcat="); ok {
 					addr = strings.TrimSpace(suf)
 					break
 				}
 			}
 		}
 		if addr == "" {
-			log.Fatalf("argument %q doesn't start with 'dc' and not a DNS name with a tailpipe TXT record", args[0])
+			log.Fatalf("argument %q doesn't start with 'tc' and not a DNS name with a tailcat TXT record", args[0])
 		}
 		var dst string
 		if len(args) == 2 {
@@ -186,7 +186,7 @@ func clientKey() key.NodePrivate {
 	if err != nil {
 		log.Fatal(err)
 	}
-	var conf derpcat.PrivateKey
+	var conf tailcat.PrivateKey
 	if err := json.Unmarshal(j, &conf); err != nil {
 		log.Fatalf("failed to parse %v: %v", path, err)
 	}
@@ -197,10 +197,10 @@ func clientPingMode(logf logger.Logf) {
 	args := flag.Args()
 	args = args[1:] // trim "ping"
 	if len(args) == 0 {
-		usage("tailpipe ping <addrblob>")
+		usage("tailcat ping <addrblob>")
 	}
 	priv := clientKey()
-	cl, err := derpcat.NewClient(logf, derpcat.ConnBlob(args[0]), priv)
+	cl, err := tailcat.NewClient(logf, tailcat.ConnBlob(args[0]), priv)
 	if err != nil {
 		log.Fatalf("NewClient: %v", err)
 	}
@@ -218,9 +218,9 @@ func clientPingMode(logf logger.Logf) {
 
 func clientMode(logf logger.Logf, connStr, optDest string) {
 	priv := clientKey()
-	cl, err := derpcat.NewClient(logf, derpcat.ConnBlob(connStr), priv)
+	cl, err := tailcat.NewClient(logf, tailcat.ConnBlob(connStr), priv)
 	if err != nil {
-		log.Fatalf("derpcat.NewClient: %v", err)
+		log.Fatalf("tailcat.NewClient: %v", err)
 	}
 
 	var dial func(context.Context) (net.Conn, error)
@@ -242,11 +242,11 @@ func clientMode(logf logger.Logf, connStr, optDest string) {
 	}
 
 	if err := cl.Start(); err != nil {
-		log.Fatalf("derpcat.Start: %v", err)
+		log.Fatalf("tailcat.Start: %v", err)
 	}
 	pi, err := cl.Ping(context.Background())
 	if err != nil {
-		log.Fatalf("tailpipe Ping: %v", err)
+		log.Fatalf("tailcat Ping: %v", err)
 	}
 	if *flagVerbose {
 		logf("got ping: %+v", pi)
@@ -296,11 +296,11 @@ func clientMode(logf logger.Logf, connStr, optDest string) {
 func clientSOCKSMode(logf logger.Logf) {
 	args := flag.Args() // "socks", <derpaddr>, <cmd>, [args...]
 	if len(args) < 3 {
-		usage("tailpipe socks <addrblob> <cmd> [args...]")
+		usage("tailcat socks <addrblob> <cmd> [args...]")
 	}
 	progArgs := args[2:]
 
-	cl, err := derpcat.NewClient(logf, derpcat.ConnBlob(args[1]), key.NewNode())
+	cl, err := tailcat.NewClient(logf, tailcat.ConnBlob(args[1]), key.NewNode())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -309,7 +309,7 @@ func clientSOCKSMode(logf logger.Logf) {
 	}
 	pi, err := cl.Ping(context.Background())
 	if err != nil {
-		log.Fatalf("tailpipe Ping: %v", err)
+		log.Fatalf("tailcat Ping: %v", err)
 	}
 	logf("got ping: %+v", pi)
 
@@ -351,10 +351,10 @@ func clientSOCKSMode(logf logger.Logf) {
 func clientParseMode(logf logger.Logf) {
 	args := flag.Args()
 	if len(args) != 2 {
-		usage("tailpipe parse <addrblob>")
+		usage("tailcat parse <addrblob>")
 	}
 	dst := args[1]
-	ci, err := derpcat.ParseConnBlob(derpcat.ConnBlob(dst))
+	ci, err := tailcat.ParseConnBlob(tailcat.ConnBlob(dst))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -370,13 +370,13 @@ func server(logf logger.Logf) {
 	}
 
 	var reg *tailcfg.DERPRegion
-	if envknob.Bool("TS_DEBUG_DC_LOCAL_DERP") {
+	if envknob.Bool("TS_DEBUG_TAILCAT_LOCAL_DERP") {
 		log.Printf("Local DERP mode.")
 		reg = runDevDERP(logger.WithPrefix(logf, "[dev-derp] "))
 	}
 
 	var priv key.NodePrivate
-	var ci *derpcat.ConnInfo
+	var ci *tailcat.ConnInfo
 
 	if *flagKey == "" {
 		if _, err := os.Stat(keyPath("default")); err == nil {
@@ -389,14 +389,14 @@ func server(logf logger.Logf) {
 	}
 	if *flagKey == "new" {
 		priv = key.NewNode()
-		ci = &derpcat.ConnInfo{RegionID: -1} // auto-detect
+		ci = &tailcat.ConnInfo{RegionID: -1} // auto-detect
 	} else {
 		path := keyPath(*flagKey)
 		j, err := os.ReadFile(path)
 		if err != nil {
 			log.Fatal(err)
 		}
-		var conf derpcat.PrivateKey
+		var conf tailcat.PrivateKey
 		if err := json.Unmarshal(j, &conf); err != nil {
 			log.Fatalf("failed to parse %v: %v", path, err)
 		}
@@ -410,8 +410,8 @@ func server(logf logger.Logf) {
 
 		reg = ci.Region[0]
 		if *flagKey == "new" {
-			ci = &derpcat.ConnInfo{
-				ServerPublic: derpcat.NodePublic{NodePublic: priv.Public()},
+			ci = &tailcat.ConnInfo{
+				ServerPublic: tailcat.NodePublic{NodePublic: priv.Public()},
 				RegionID:     reg.RegionID,
 			}
 		}
@@ -420,11 +420,11 @@ func server(logf logger.Logf) {
 	}
 	connStr := ci.ConnBlob()
 
-	s, err := derpcat.NewServer(priv, logf, reg)
+	s, err := tailcat.NewServer(priv, logf, reg)
 	if err != nil {
 		log.Fatalf("NewServer: %v", err)
 	}
-	if services.Contains("no-auth-ssh") && !derpcat.SupportsSSHServer() {
+	if services.Contains("no-auth-ssh") && !tailcat.SupportsSSHServer() {
 		log.Fatalf("Tailscale SSH server not supported on %v", runtime.GOOS)
 	}
 	if *flagAllow != "" {
@@ -470,7 +470,7 @@ func server(logf logger.Logf) {
 	}
 
 	s.OnTCP = func(port uint16) (handler func(net.Conn)) {
-		if port == 22 && services.Contains("no-auth-ssh") && tailPipeSSHEnabled {
+		if port == 22 && services.Contains("no-auth-ssh") && tailCatSSHEnabled {
 			return s.HandleTailscaleSSHConn
 		}
 		if services.Contains("exit-node") {
@@ -501,11 +501,11 @@ func server(logf logger.Logf) {
 	if *flagJSON {
 		json.NewEncoder(os.Stdout).Encode(map[string]string{"listenAddr": string(connStr)})
 	}
-	if v := os.Getenv("DC_ADDR_FILE"); v != "" {
+	if v := os.Getenv("TAILCAT_ADDR_FILE"); v != "" {
 		if tcpAddr, ok := strings.CutPrefix(v, "tcp:"); ok {
 			c, err := net.Dial("tcp", tcpAddr)
 			if err != nil {
-				log.Fatalf("DC_ADDR_FILE tcp dial %q: %v", tcpAddr, err)
+				log.Fatalf("TAILCAT_ADDR_FILE tcp dial %q: %v", tcpAddr, err)
 			}
 			fmt.Fprintln(c, connStr)
 			c.Close()
@@ -516,7 +516,7 @@ func server(logf logger.Logf) {
 		}
 	}
 
-	if os.Getenv("DERPCAT_STATUS_LOOP") == "1" {
+	if os.Getenv("TAILCAT_STATUS_LOOP") == "1" {
 		go func() {
 			for {
 				log.Printf("status = %v", logger.AsJSON(s.Status()))
@@ -549,7 +549,7 @@ func parsePortSet(s string) (ports set.Set[uint16], services set.Set[string], _ 
 			}
 			continue
 		case "no-auth-ssh":
-			if !tailPipeSSHEnabled {
+			if !tailCatSSHEnabled {
 				return nil, nil, fmt.Errorf("SSH support not included in binary per build tags")
 			}
 			services.Add(r)
@@ -632,7 +632,7 @@ func keyPath(name string) string {
 	if err != nil {
 		log.Fatal(err)
 	}
-	return filepath.Join(confDir, "tailpipe", "keys", name+".private.json")
+	return filepath.Join(confDir, "tailcat", "keys", name+".private.json")
 }
 
 func genKey() {
@@ -648,7 +648,7 @@ func genKey() {
 	}
 
 	var (
-		key          = fs.String("key", "default", "key path (if it contains a slash) or name (written to "+confDir+"/tailpipe/keys/<name>.private.json)")
+		key          = fs.String("key", "default", "key path (if it contains a slash) or name (written to "+confDir+"/tailcat/keys/<name>.private.json)")
 		force        = fs.Bool("force", false, "force overwrite of existing key")
 		delete       = fs.Bool("delete", false, "delete named key instead of generating it; only valid if key doesn't contain slashes")
 		region       = fs.String("region", "auto", "region ID, code, or substring to use. Or a hostname(s) comma-separated to use a custom DERP server(s). If 'auto', one is picked based on latency. If 'list', list all regions.")
@@ -658,7 +658,7 @@ func genKey() {
 	switch len(fs.Args()) {
 	case 0:
 	default:
-		fmt.Fprintf(os.Stderr, "tailpipe genkey [-name=<name>] [-force] [name]\n")
+		fmt.Fprintf(os.Stderr, "tailcat genkey [-name=<name>] [-force] [name]\n")
 		os.Exit(1)
 	}
 
@@ -681,7 +681,7 @@ func genKey() {
 		}
 	}
 
-	priv := derpcat.NewPrivateKey()
+	priv := tailcat.NewPrivateKey()
 	var match string
 	if *region == "auto" {
 		priv.Public.RegionID = -1

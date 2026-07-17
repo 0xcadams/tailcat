@@ -1,9 +1,9 @@
 // Copyright (c) Tailscale Inc & contributors
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package derpcat implements a control-plane-free network pipe built on
+// Package tailcat implements a control-plane-free network pipe built on
 // Tailscale's magicsock data plane and WireGuard. It is the library behind the
-// "tailpipe" command (cmd/tailpipe).
+// "tailcat" command (cmd/tailcat).
 //
 // A [Server] listens for incoming clients via a DERP relay. Clients discover
 // the server through a compact [ConnBlob] (connection blob) that encodes the
@@ -18,12 +18,12 @@
 // Optionally, the server can run an auth-free SSH server on port 22, providing
 // remote shell access over the tunnel.
 //
-// The name "derpcat" is a nod to the classic "netcat" tool, but with
-// Tailscale's DERP as the bootstrap mechanism.
+// The name "tailcat" is a nod to the classic "netcat" tool, but with
+// Tailscale's WireGuard encryption + NAT traversal.
 //
 // Using Tailscale's DERP servers is not required; you can run your own DERP
 // server and provide its region information in the ConnBlob.
-package derpcat
+package tailcat
 
 import (
 	"cmp"
@@ -76,8 +76,8 @@ import (
 var Verbose = false
 
 // ConnBlob is a compact, URL-safe string that a server gives to clients so
-// they can connect. It is the "dc"-prefixed base64url encoding of CBOR-encoded
-// [ConnInfo]. A typical ConnBlob looks like "dcomFwWC…".
+// they can connect. It is the "tc"-prefixed base64url encoding of CBOR-encoded
+// [ConnInfo]. A typical ConnBlob looks like "tcomFwWC…".
 type ConnBlob string
 
 // ConnInfo describes how to reach a server: its public key and which DERP
@@ -323,7 +323,7 @@ func NewServer(priv key.NodePrivate, logf logger.Logf, regs ...*tailcfg.DERPRegi
 		return ns.DialContextTCP(ctx, dst)
 	}
 	dialer.NetstackDialUDP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
-		panic("unreachable from derpcat") // but required by Dialer currently
+		panic("unreachable from tailcat") // but required by Dialer currently
 	}
 
 	sys.Tun.Get().Start()
@@ -358,7 +358,7 @@ func (s *Server) ConnBlobForTest() ConnBlob {
 
 func newLocoBackend(priv key.NodePrivate) *locoBackend {
 	pub := priv.Public()
-	addr := dcAddrForKey(pub)
+	addr := tcAddrForKey(pub)
 	addrPrefix := netip.PrefixFrom(addr, addr.BitLen())
 	lb := &locoBackend{
 		logf:       log.Printf,
@@ -424,7 +424,7 @@ func (ci *ConnInfo) ConnBlob() ConnBlob {
 		log.Printf("ConnBlob: %q", x)
 		log.Printf("ConnBlob: %x", x)
 	}
-	return "dc" + ConnBlob(base64.RawURLEncoding.EncodeToString(x))
+	return "tc" + ConnBlob(base64.RawURLEncoding.EncodeToString(x))
 }
 
 // ParseConnBlob decodes a [ConnBlob] back into a [ConnInfo], restoring
@@ -432,9 +432,9 @@ func (ci *ConnInfo) ConnBlob() ConnBlob {
 // Tailscale DERP hostnames).
 func ParseConnBlob(cb ConnBlob) (ConnInfo, error) {
 	var zero ConnInfo
-	rest, ok := strings.CutPrefix(string(cb), "dc")
+	rest, ok := strings.CutPrefix(string(cb), "tc")
 	if !ok {
-		return zero, errors.New("server address doesn't start with \"dc\"")
+		return zero, errors.New("server address doesn't start with \"tc\"")
 	}
 	x, err := base64.RawURLEncoding.DecodeString(rest)
 	if err != nil {
@@ -490,9 +490,9 @@ func (ci *ConnInfo) Expand(ctx context.Context, forServer bool) error {
 		return fmt.Errorf("fetching DERPMap for region %v: %w", ci.RegionID, err)
 	}
 	if forServer {
-		req.Header.Add("Tailpipe-User", "vc-listen")
+		req.Header.Add("Tailcat-User", "vc-listen")
 	} else {
-		req.Header.Add("Tailpipe-User", "vc")
+		req.Header.Add("Tailcat-User", "vc")
 	}
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -553,7 +553,7 @@ func (ci *ConnInfo) Expand(ctx context.Context, forServer bool) error {
 		// Make a random order of the first 10 region IDs and return the first
 		// one we find that exists, ignoring what's close to the user. Avoid
 		// STUN, etc. Assume the server will filter things away based on our
-		// IP when the Tailpipe-User == "vc-listen".
+		// IP when the Tailcat-User == "vc-listen".
 		regIDs := make([]int, 10)
 		for i := range regIDs {
 			regIDs[i] = i + 1
@@ -602,7 +602,7 @@ func (lb *locoBackend) Start() error {
 		nm.SelfNode = (&tailcfg.Node{
 			ID:         1,
 			StableID:   "1",
-			Name:       "server.derpcat.",
+			Name:       "server.tailcat.",
 			User:       100,
 			Key:        lb.pub,
 			DiscoKey:   mc.DiscoPublicKey(),
@@ -612,13 +612,13 @@ func (lb *locoBackend) Start() error {
 		}).View()
 	} else {
 		// We're the client.
-		serverAddr := dcAddrForKey(lb.serverPub)
+		serverAddr := tcAddrForKey(lb.serverPub)
 		serverAddrPrefix := netip.PrefixFrom(serverAddr, serverAddr.BitLen())
 
 		nm.SelfNode = (&tailcfg.Node{
 			ID:        2,
 			StableID:  "2",
-			Name:      "client.derpcat.",
+			Name:      "client.tailcat.",
 			User:      100,
 			Key:       lb.pub,
 			DiscoKey:  mc.DiscoPublicKey(),
@@ -628,7 +628,7 @@ func (lb *locoBackend) Start() error {
 		nm.Peers = append(nm.Peers, (&tailcfg.Node{
 			ID:         1,
 			StableID:   "1",
-			Name:       "server.derpcat.",
+			Name:       "server.tailcat.",
 			User:       100,
 			Key:        lb.serverPub,
 			DiscoKey:   nodePublicAsDiscoPublic(lb.serverPub),
@@ -692,12 +692,12 @@ func (b *locoBackend) onMeow(src key.NodePublic, discoPub key.DiscoPublic) {
 	mak.Set(&b.clients, src, &tailcfg.Node{
 		ID:         tailcfg.NodeID(id),
 		StableID:   tailcfg.StableNodeID(fmt.Sprint(id)),
-		Name:       fmt.Sprintf("client%d.derpcat.", id),
+		Name:       fmt.Sprintf("client%d.tailcat.", id),
 		User:       100,
 		Key:        src,
 		DiscoKey:   discoPub,
-		Addresses:  []netip.Prefix{pfxOf(dcAddrForKey(src))},
-		AllowedIPs: []netip.Prefix{pfxOf(dcAddrForKey(src))},
+		Addresses:  []netip.Prefix{pfxOf(tcAddrForKey(src))},
+		AllowedIPs: []netip.Prefix{pfxOf(tcAddrForKey(src))},
 		HomeDERP:   derpRegion,
 	})
 
@@ -707,7 +707,7 @@ func (b *locoBackend) onMeow(src key.NodePublic, discoPub key.DiscoPublic) {
 		SelfNode: (&tailcfg.Node{
 			ID:         1,
 			StableID:   "1",
-			Name:       "server.derpcat.",
+			Name:       "server.tailcat.",
 			User:       100,
 			Key:        b.pub,
 			DiscoKey:   nodePrivateAsDiscoPrivate(b.priv).Public(), // TODO: cache
@@ -760,7 +760,7 @@ func (b *locoBackend) Status() *ipnstate.Status {
 	return sb.Status()
 }
 
-func dcAddrForKey(k key.NodePublic) netip.Addr {
+func tcAddrForKey(k key.NodePublic) netip.Addr {
 	var a [16]byte
 	r := k.Raw32()
 	// Use Tailscale's ULA range fd7a:115c:a1e0::/48, filling the
@@ -908,14 +908,14 @@ func NewClient(logf logger.Logf, server ConnBlob, priv key.NodePrivate) (*Client
 		return ns.DialContextTCP(ctx, dst)
 	}
 	dialer.NetstackDialUDP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
-		panic("unreachable from derpcat") // but required by Dialer currently
+		panic("unreachable from tailcat") // but required by Dialer currently
 	}
 	sys.Tun.Get().Start()
 
 	return &Client{
 		ci:         ci,
 		lb:         lb,
-		serverAddr: dcAddrForKey(ci.ServerPublic.NodePublic),
+		serverAddr: tcAddrForKey(ci.ServerPublic.NodePublic),
 		meowWait:   meowWait,
 	}, nil
 }
@@ -1052,7 +1052,7 @@ func (b *locoBackend) sshPolicy() *tailcfg.SSHPolicy {
 				Principals: []*tailcfg.SSHPrincipal{{Any: true}},
 				SSHUsers:   map[string]string{"*": os.Getenv("USER")},
 				Action: &tailcfg.SSHAction{
-					Message: "\nWelcome to Tailpipe SSH.\n\n",
+					Message: "\nWelcome to Tailcat SSH.\n\n",
 					Accept:  true,
 				},
 			},
@@ -1061,7 +1061,7 @@ func (b *locoBackend) sshPolicy() *tailcfg.SSHPolicy {
 }
 
 // nodePrivateAsDiscoPrivate converts a NodePrivate to a DiscoPrivate by
-// reusing the same raw key bytes. This is used in derpcat where the server
+// reusing the same raw key bytes. This is used in tailcat where the server
 // uses its node key as the disco key.
 func nodePrivateAsDiscoPrivate(k key.NodePrivate) key.DiscoPrivate {
 	raw := k.Raw32()
@@ -1069,7 +1069,7 @@ func nodePrivateAsDiscoPrivate(k key.NodePrivate) key.DiscoPrivate {
 }
 
 // nodePublicAsDiscoPublic converts a NodePublic to a DiscoPublic by
-// reusing the same raw key bytes. This is used in derpcat where the
+// reusing the same raw key bytes. This is used in tailcat where the
 // server's node public key doubles as its disco public key.
 func nodePublicAsDiscoPublic(k key.NodePublic) key.DiscoPublic {
 	raw := k.Raw32()
