@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 // Package tailcat implements a control-plane-free network pipe built on
-// Tailscale's magicsock data plane and WireGuard. It is the library behind the
-// "tailcat" command (cmd/tailcat).
+// Tailscale's data plane which provides encryption (WireGuard) and NAT traversal.
+// This is the library behind the "tailcat" CLI command (cmd/tailcat).
 //
 // A [Server] listens for incoming clients via a DERP relay. Clients discover
 // the server through a compact [ConnBlob] (connection blob) that encodes the
