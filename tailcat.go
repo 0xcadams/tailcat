@@ -521,7 +521,7 @@ func (ci *ConnInfo) Expand(ctx context.Context, forServer bool) error {
 			nc.Logf = log.Printf
 		}
 		if err := nc.Standalone(ctx, ":0"); err != nil {
-			log.Fatalf("netcheck.Standalone: %v", err)
+			return fmt.Errorf("netcheck.Standalone: %w", err)
 		}
 		t0 := time.Now()
 		nr, err := nc.GetReport(ctx, &dm, &netcheck.GetReportOpts{})
