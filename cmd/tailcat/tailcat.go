@@ -717,7 +717,16 @@ func genKey() {
 		}
 	}
 	if *region == "" {
-		log.Fatalf("TODO: pick a region automatically from netcheck over derpmap")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		id, err := tailcat.PickBestRegion(ctx, &dm)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if id == 0 {
+			log.Fatalf("couldn't determine the closest DERP region; specify --region")
+		}
+		priv.Public.RegionID = id
 	}
 
 	ci := &priv.Public
