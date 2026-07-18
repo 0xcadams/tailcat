@@ -703,8 +703,17 @@ func genKey() {
 	}
 
 	var dm tailcfg.DERPMap
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	if match != "" || *region == "" || *embedDERPMap {
-		res, err := http.Get("https://login.tailscale.com/derpmap/default")
+		req, err := http.NewRequestWithContext(ctx, "GET", "https://login.tailscale.com/derpmap/default", nil)
+		if err != nil {
+			log.Fatal(err)
+		}
+		// genkey picks the region a future server will listen on.
+		req.Header.Set("Tailcat-Mode", "server")
+		res, err := http.DefaultClient.Do(req)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -717,8 +726,6 @@ func genKey() {
 		}
 	}
 	if *region == "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
 		id, err := tailcat.PickBestRegion(ctx, &dm)
 		if err != nil {
 			log.Fatal(err)

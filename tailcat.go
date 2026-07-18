@@ -490,9 +490,9 @@ func (ci *ConnInfo) Expand(ctx context.Context, forServer bool) error {
 		return fmt.Errorf("fetching DERPMap for region %v: %w", ci.RegionID, err)
 	}
 	if forServer {
-		req.Header.Add("Tailcat-User", "vc-listen")
+		req.Header.Set("Tailcat-Mode", "server")
 	} else {
-		req.Header.Add("Tailcat-User", "vc")
+		req.Header.Set("Tailcat-Mode", "client")
 	}
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -527,7 +527,7 @@ func (ci *ConnInfo) Expand(ctx context.Context, forServer bool) error {
 		// Make a random order of the first 10 region IDs and return the first
 		// one we find that exists, ignoring what's close to the user. Avoid
 		// STUN, etc. Assume the server will filter things away based on our
-		// IP when the Tailcat-User == "vc-listen".
+		// IP when the Tailcat-Mode == "server".
 		regIDs := make([]int, 10)
 		for i := range regIDs {
 			regIDs[i] = i + 1
