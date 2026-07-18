@@ -42,7 +42,7 @@ import (
 )
 
 var (
-	flagServe   = flag.String("serve", "", "comma-separated list of port numbers, port ranges, or service names to serve. Service names are: 'all' (serve all ports), 'exit' (run an exit node for all addresses), 'no-auth-ssh' (auth-free SSH server). If empty, it listens only on port 0 and writes to stdout.")
+	flagServe   = flag.String("serve", "", "comma-separated list of port numbers, port ranges, or service names to serve. Service names are: 'all' (serve all ports), 'exit-node' (run an exit node for all addresses), 'no-auth-ssh' (auth-free SSH server). If empty, it listens only on port 0 and writes to stdout.")
 	flagKey     = flag.String("key", "", "'new' for an ephemeral one, '' for the 'default' key (if it exists), else a new key. Otherwise the path to a *.key.json or a name like 'foo' to read it from $CONFIG/tailcat/keys/foo.key.json")
 	flagAllow   = flag.String("allow", "", "comma-separated list of public keys to allow access to the server")
 	flagVerbose = flag.Bool("verbose", false, "be verbose")
