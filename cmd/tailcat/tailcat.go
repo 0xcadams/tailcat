@@ -658,7 +658,7 @@ func genKey() {
 	switch len(fs.Args()) {
 	case 0:
 	default:
-		fmt.Fprintf(os.Stderr, "tailcat genkey [-name=<name>] [-force] [name]\n")
+		fmt.Fprintf(os.Stderr, "tailcat genkey [-key=<name>] [-force]\n")
 		os.Exit(1)
 	}
 
