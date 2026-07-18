@@ -676,7 +676,9 @@ func genKey() {
 		}
 	}
 	if _, err := os.Stat(*key); err == nil {
-		if !*force && *region != "list" && *region != "auto" {
+		// The "list" mode exits before writing anything, so it
+		// doesn't need --force.
+		if !*force && *region != "list" {
 			log.Fatalf("%v already exists; use --force to overwrite", *key)
 		}
 	}
