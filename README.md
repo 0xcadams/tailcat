@@ -56,8 +56,10 @@ tailcat --serve=8080,8443
 # Serve all ports
 tailcat --serve=all
 
-# Client connects to a port
-curl --connect-to ::localhost:1234 http://server/ | tailcat <token> 8080
+# Client connects to a port, netcat style: stdin/stdout are piped to
+# port 8080 on the server. For HTTP clients like curl, see the SOCKS5
+# proxy mode below.
+tailcat <token> 8080
 ```
 
 Run an auth-free Tailscale SSH server (Linux/macOS):
