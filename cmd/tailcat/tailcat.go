@@ -742,7 +742,9 @@ func genKey() {
 		if keyIsPath(*key) {
 			log.Fatalf("can't delete key %q; it's a path", *key)
 		}
-		os.Remove(keyPath(*key))
+		if err := os.Remove(keyPath(*key)); err != nil {
+			log.Fatal(err)
+		}
 		return
 	}
 	if !keyIsPath(*key) {
