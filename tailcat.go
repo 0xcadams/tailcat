@@ -293,9 +293,15 @@ func NewServer(priv key.NodePrivate, logf logger.Logf, regs ...*tailcfg.DERPRegi
 			return true // server ignores meowed
 		}
 		if _, discoPub, ok := ParseMeowPing(pkt); ok {
-			go lb.onMeow(src, discoPub)
 			mc := lb.sys.MagicSock.Get()
-			go mc.SendDERPPacketTo(src, regionID, EncodeMeowed())
+			go func() {
+				// Only reply once the client is fully added as a peer:
+				// "meowed" is the ack that tells the client it can
+				// start dialing. Disallowed clients get no reply.
+				if lb.onMeow(src, discoPub) {
+					mc.SendDERPPacketTo(src, regionID, EncodeMeowed())
+				}
+			}()
 			return true
 		}
 		return false
@@ -784,17 +790,21 @@ func (lb *locoBackend) Start() error {
 	return nil
 }
 
-func (b *locoBackend) onMeow(src key.NodePublic, discoPub key.DiscoPublic) {
+// onMeow handles a MeowPing from the client with node key src and
+// disco key discoPub, adding it as a WireGuard peer. It reports
+// whether the client is allowed and configured, meaning a "meowed"
+// acknowledgment may be sent.
+func (b *locoBackend) onMeow(src key.NodePublic, discoPub key.DiscoPublic) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.logf("got meow from %v", src.String())
 	if b.allowedClients != nil && !b.allowedClients[src] {
-		log.Printf("ignoring meow from %v: not in allowedClients", src.String())
-		return
+		b.logf("ignoring meow from %v: not in allowedClients", src.String())
+		return false
 	}
 
 	if _, ok := b.clients[src]; ok {
-		return
+		return true
 	}
 	id := len(b.clients) + 2 // server id ID 1, clients are IDs 2, 3, ...
 	derpRegion := b.derpRegionID()
@@ -839,6 +849,7 @@ func (b *locoBackend) onMeow(src key.NodePublic, discoPub key.DiscoPublic) {
 	// No engine reconfig needed: the WireGuard device learns about the
 	// new peer lazily via the config source installed with
 	// SetPeerConfigFunc when the client's handshake arrives.
+	return true
 }
 
 func (b *locoBackend) Status() *ipnstate.Status {

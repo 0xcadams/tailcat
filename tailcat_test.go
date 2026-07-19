@@ -90,7 +90,8 @@ func TestTailcat(t *testing.T) {
 	}
 	t.Logf("got ping: %+v", pi)
 
-	time.Sleep(1 * time.Second)
+	// No sleep here: a successful Ping means the server has fully
+	// added us as a peer and we may dial immediately.
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -180,7 +181,6 @@ func TestHalfClose(t *testing.T) {
 	if _, err := c.Ping(context.Background()); err != nil {
 		t.Fatalf("Ping: %v", err)
 	}
-	time.Sleep(1 * time.Second)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
