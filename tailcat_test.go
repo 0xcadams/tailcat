@@ -77,9 +77,6 @@ func TestTailcat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	if err := c.Start(); err != nil {
-		t.Fatalf("client Start: %v", err)
-	}
 	t.Cleanup(func() { c.Close() })
 
 	t.Logf("Client is %v", c.PublicKey())
@@ -175,9 +172,6 @@ func TestHalfClose(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 	t.Cleanup(func() { c.Close() })
-	if err := c.Start(); err != nil {
-		t.Fatalf("client Start: %v", err)
-	}
 	if _, err := c.Ping(context.Background()); err != nil {
 		t.Fatalf("Ping: %v", err)
 	}

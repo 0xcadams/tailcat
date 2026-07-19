@@ -42,6 +42,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -496,6 +497,36 @@ func (ci *ConnInfo) ConnBlob() ConnBlob {
 	return "tc" + ConnBlob(base64.RawURLEncoding.EncodeToString(x))
 }
 
+// Resolve returns a self-contained equivalent of b with the DERP
+// relay's details embedded, so that later use of the blob requires
+// no network access to fetch the DERP map. It is to a ConnBlob
+// roughly what a DNS lookup is to a hostname: the resolved form is
+// longer, works offline, and pins the relay details as they were at
+// resolution time. If b already embeds its relay details, it is
+// returned unchanged.
+func (b ConnBlob) Resolve(ctx context.Context) (ConnBlob, error) {
+	ci, err := ParseConnBlob(b)
+	if err != nil {
+		return "", err
+	}
+	if len(ci.Region) > 0 {
+		return b, nil
+	}
+	if err := ci.Expand(ctx, false); err != nil {
+		return "", err
+	}
+	// Keep the blob short: two relay nodes suffice, and their IPv6
+	// addresses can be re-derived from DNS.
+	for _, r := range ci.Region {
+		r.Nodes = r.Nodes[:min(2, len(r.Nodes))]
+		for _, n := range r.Nodes {
+			n.IPv6 = ""
+		}
+	}
+	ci.RegionID = 0
+	return ci.ConnBlob(), nil
+}
+
 // ParseConnBlob decodes a [ConnBlob] back into a [ConnInfo], restoring
 // fields that were stripped during encoding (RegionID, RegionCode, implicit
 // Tailscale DERP hostnames).
@@ -917,27 +948,33 @@ func createEngine(logf logger.Logf, lb *locoBackend) (err error) {
 }
 
 // Client connects to a [Server] over a WireGuard tunnel relayed through DERP.
-// After creating a Client with [NewClient] and calling [Client.Start], use
-// [Client.Ping] to perform the meow handshake, then [Client.DialTCPPort] or
-// [Client.DialTCP] to open TCP connections to the server.
+// After creating a Client with [NewClient], just dial: [Client.Dial],
+// [Client.DialTCPPort], and [Client.DialTCP] lazily establish the tunnel on
+// first use. [Client.Ping] does the same and is useful to test connectivity
+// first or to measure the relay round-trip time.
 type Client struct {
 	lb       *locoBackend
 	ci       ConnInfo      // of server
 	meowWait chan struct{} // closed on first meowed message from server
 
 	serverAddr netip.Addr
+
+	startMu sync.Mutex // guards started and the one-time startup work
+	started bool
+
+	upDone atomic.Bool // whether the server has meowed us at least once
 }
 
 // NewClient creates a client that will connect to the server identified by the
-// given [ConnBlob]. The priv key is the client's own node identity. Call
-// [Client.Start] and then [Client.Ping] to establish the tunnel.
+// given [ConnBlob]. The priv key is the client's own node identity.
+//
+// NewClient does no network access; the tunnel is established lazily
+// by the first Dial or [Client.Ping] call, which also resolves the
+// DERP region if the ConnBlob references it by ID rather than
+// embedding it.
 func NewClient(logf logger.Logf, server ConnBlob, priv key.NodePrivate) (*Client, error) {
 	ci, err := ParseConnBlob(server)
 	if err != nil {
-		return nil, err
-	}
-
-	if err := ci.Expand(context.TODO(), false); err != nil {
 		return nil, err
 	}
 
@@ -945,12 +982,6 @@ func NewClient(logf logger.Logf, server ConnBlob, priv key.NodePrivate) (*Client
 	lb.logf = logf
 	lb.dm = &tailcfg.DERPMap{}
 	lb.serverPub = ci.ServerPublic.NodePublic
-	for _, r := range ci.Region {
-		mak.Set(&lb.dm.Regions, r.RegionID, r)
-	}
-	if len(ci.Region) == 0 {
-		return nil, fmt.Errorf("no DERP regions in ConnBlob")
-	}
 
 	sys := &lb.sys
 	bus := eventbus.New()
@@ -1040,18 +1071,69 @@ type PingResult struct {
 	Latency time.Duration
 }
 
-// Start connects to the DERP relay and configures WireGuard. After Start
-// returns, call [Client.Ping] to perform the meow handshake with the server.
-func (c *Client) Start() error {
-	return c.lb.Start()
+// ensureStarted brings up the client's network stack on first use:
+// it resolves the server's DERP region if the ConnBlob didn't embed
+// it (possibly fetching the DERP map over the network, bounded by
+// ctx; see [ConnBlob.Resolve] to do that step earlier), connects to
+// the DERP relay, and configures WireGuard. Failed attempts are
+// retried on the next call.
+func (c *Client) ensureStarted(ctx context.Context) error {
+	c.startMu.Lock()
+	defer c.startMu.Unlock()
+	if c.started {
+		return nil
+	}
+	if err := c.ci.Expand(ctx, false); err != nil {
+		return err
+	}
+	if len(c.ci.Region) == 0 {
+		return errors.New("no DERP regions in ConnBlob")
+	}
+	for _, r := range c.ci.Region {
+		mak.Set(&c.lb.dm.Regions, r.RegionID, r)
+	}
+	if err := c.lb.Start(); err != nil {
+		return err
+	}
+	c.started = true
+	return nil
 }
 
-// Ping sends a meow ping to the server via DERP and waits for the meowed
-// acknowledgment. This must be called at least once after [Client.Start] to
-// establish the WireGuard tunnel; subsequent calls are no-ops because the
-// meowWait channel is already closed. The internal timeout is 10 seconds
+// up ensures the client is started and the server has acknowledged
+// us as a peer, performing the meow handshake on first use. Dial
+// methods call it so that a fresh Client can dial directly with no
+// setup calls. A concurrent first use may ping twice; the handshake
+// is idempotent.
+func (c *Client) up(ctx context.Context) error {
+	if c.upDone.Load() {
+		return nil
+	}
+	_, err := c.Ping(ctx)
+	return err
+}
+
+// Ping starts the client if needed (see [Client.Dial] for the lazy
+// startup behavior), sends a meow ping to the server via DERP, and
+// waits for the meowed acknowledgment, which also tells the server
+// to add us as a WireGuard peer. Calling it is optional (Dial does
+// it implicitly) but useful to test connectivity or measure the
+// relay round-trip time. The internal timeout is 10 seconds
 // regardless of ctx.
 func (c *Client) Ping(ctx context.Context) (PingResult, error) {
+	var zero PingResult
+	if err := c.ensureStarted(ctx); err != nil {
+		return zero, err
+	}
+	res, err := c.ping(ctx)
+	if err == nil {
+		c.upDone.Store(true)
+	}
+	return res, err
+}
+
+// ping sends a single meow ping and waits for the meowed ack. The
+// client must be started.
+func (c *Client) ping(ctx context.Context) (PingResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
@@ -1081,12 +1163,24 @@ func (c *Client) Ping(ctx context.Context) (PingResult, error) {
 
 // Dial opens a connection to the given network/address through the server's
 // WireGuard tunnel. The address is resolved relative to the server.
+//
+// On a Client's first use (any Dial method or [Client.Ping]), the
+// client lazily brings up its network stack, resolving the server's
+// DERP region over the network if the ConnBlob didn't embed it, and
+// registers itself with the server.
 func (c *Client) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
+	if err := c.up(ctx); err != nil {
+		return nil, err
+	}
 	return c.lb.sys.Dialer.Get().UserDial(ctx, network, addr)
 }
 
 // DialTCPPort opens a TCP connection to the given port on the server.
+// See [Client.Dial] for the lazy startup behavior.
 func (c *Client) DialTCPPort(ctx context.Context, port uint16) (net.Conn, error) {
+	if err := c.up(ctx); err != nil {
+		return nil, err
+	}
 	return c.lb.sys.Dialer.Get().UserDial(ctx, "tcp", net.JoinHostPort(c.serverAddr.String(), fmt.Sprint(port)))
 }
 
@@ -1099,7 +1193,11 @@ var (
 // which must be configured as an exit node (see [Server.OnTCPForward]).
 // IPv4 addresses are mapped into the NAT64 prefix (64:ff9b::/96) for
 // transport over the IPv6-only WireGuard tunnel.
+// See [Client.Dial] for the lazy startup behavior.
 func (c *Client) DialTCP(ctx context.Context, ap netip.AddrPort) (net.Conn, error) {
+	if err := c.up(ctx); err != nil {
+		return nil, err
+	}
 	if ap.Addr().Is4() {
 		a := nat64PrefixBytes
 		a4 := ap.Addr().As4()

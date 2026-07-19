@@ -226,11 +226,7 @@ func clientPingMode(logf logger.Logf) {
 		log.Fatalf("NewClient: %v", err)
 	}
 	defer cl.Close()
-	if err := cl.Start(); err != nil {
-		log.Fatalf("Start: %v", err)
-	}
-	ctx := context.Background()
-	res, err := cl.Ping(ctx)
+	res, err := cl.Ping(context.Background())
 	if err != nil {
 		log.Fatalf("Ping: %v", err)
 	}
@@ -262,9 +258,6 @@ func clientMode(logf logger.Logf, connStr, optDest string) {
 		dial = func(ctx context.Context) (net.Conn, error) { return cl.DialTCP(ctx, addrPort) }
 	}
 
-	if err := cl.Start(); err != nil {
-		log.Fatalf("tailcat.Start: %v", err)
-	}
 	pi, err := cl.Ping(context.Background())
 	if err != nil {
 		log.Fatalf("tailcat Ping: %v", err)
@@ -323,9 +316,6 @@ func clientSOCKSMode(logf logger.Logf) {
 
 	cl, err := tailcat.NewClient(logf, tailcat.ConnBlob(args[1]), key.NewNode())
 	if err != nil {
-		log.Fatal(err)
-	}
-	if err := cl.Start(); err != nil {
 		log.Fatal(err)
 	}
 	pi, err := cl.Ping(context.Background())

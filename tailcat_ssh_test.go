@@ -60,10 +60,6 @@ func setupSSHEnv(t *testing.T) *testSSHEnv {
 	}
 	t.Cleanup(func() { client.Close() })
 
-	if err := client.Start(); err != nil {
-		t.Fatalf("client.Start: %v", err)
-	}
-
 	// The DERP connections establish lazily; retry the ping until the
 	// meow/meowed handshake succeeds.
 	var pingErr error
