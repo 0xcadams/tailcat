@@ -43,7 +43,7 @@ import (
 
 var (
 	flagServe   = flag.String("serve", "", "comma-separated list of port numbers, port ranges, or service names to serve. Service names are: 'all' (serve all ports), 'exit-node' (run an exit node for all addresses), 'no-auth-ssh' (auth-free SSH server). If empty, it listens only on port 0 and writes to stdout.")
-	flagKey     = flag.String("key", "", "'new' for an ephemeral one, '' for the 'default' key (if it exists), else a new key. Otherwise the path to a *.private.json or a name like 'foo' to read it from $CONFIG/tailcat/keys/foo.private.json")
+	flagKey     = flag.String("key", "", "'new' for an ephemeral key. If empty, the default saved key is used if it exists ('default' in server mode, 'client-default' in client modes; see genkey), else an ephemeral key. Otherwise the path to a *.private.json or a name like 'foo' to read it from $CONFIG/tailcat/keys/foo.private.json")
 	flagAllow   = flag.String("allow", "", "comma-separated list of public keys to allow access to the server, or 'none' to allow no clients. If empty, all clients are allowed.")
 	flagVerbose = flag.Bool("verbose", false, "be verbose")
 	flagJSON    = flag.Bool("json", false, "in server mode, write {\"listenAddr\": ...} JSON to stdout")
@@ -111,6 +111,12 @@ Generate and save a persistent server key and print its address blob
 (run "tailcat genkey -h" for its flags):
 
 	tailcat genkey [-key=<name>] [-force]
+
+Generate and save a persistent client key and print its public key,
+for use in a server's --allow list. Client modes automatically use
+the key named "client-default" when it exists:
+
+	tailcat genkey -client
 
 Environment:
 
@@ -722,7 +728,8 @@ func genKey() {
 	}
 
 	var (
-		key          = fs.String("key", "default", "key path (if it contains a slash) or name (written to "+confDir+"/tailcat/keys/<name>.private.json)")
+		key          = fs.String("key", "", "key path (if it contains a slash) or name (written to "+confDir+"/tailcat/keys/<name>.private.json). If empty, 'default' is used, or 'client-default' with -client.")
+		client       = fs.Bool("client", false, "generate a client identity key (no DERP region) and print its public key, for use with servers' --allow lists. The 'client-default' key is used automatically by client modes.")
 		force        = fs.Bool("force", false, "force overwrite of existing key")
 		delete       = fs.Bool("delete", false, "delete named key instead of generating it; only valid if key doesn't contain slashes")
 		region       = fs.String("region", "auto", "region ID, code, or substring to use. Or a hostname(s) comma-separated to use a custom DERP server(s). If 'auto', one is picked based on latency. If 'list', list all regions.")
@@ -732,8 +739,23 @@ func genKey() {
 	switch len(fs.Args()) {
 	case 0:
 	default:
-		fmt.Fprintf(os.Stderr, "tailcat genkey [-key=<name>] [-force]\n")
+		fmt.Fprintf(os.Stderr, "tailcat genkey [-client] [-key=<name>] [-force]\n")
 		os.Exit(1)
+	}
+	if *key == "" {
+		if *client {
+			*key = "client-default"
+		} else {
+			*key = "default"
+		}
+	}
+	if *client {
+		fs.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "region", "embed-derp-map":
+				log.Fatalf("genkey -client does not take -%s; client keys have no DERP region", f.Name)
+			}
+		})
 	}
 
 	if *delete {
@@ -760,6 +782,20 @@ func genKey() {
 	}
 
 	priv := tailcat.NewPrivateKey()
+
+	if *client {
+		privj, err := json.MarshalIndent(priv, "", "\t")
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := os.WriteFile(*key, privj, 0600); err != nil {
+			log.Fatal(err)
+		}
+		fmt.Fprintf(os.Stderr, "# wrote file to %v\n", *key)
+		fmt.Println(priv.Private.Public().String())
+		return
+	}
+
 	var match string
 	if *region == "auto" {
 		priv.Public.RegionID = -1
