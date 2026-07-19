@@ -660,7 +660,7 @@ func (lb *locoBackend) Start() error {
 		PrivateKey: lb.priv,
 		Addresses:  []netip.Prefix{lb.addrPrefix},
 		MTU:        1280,
-		Peers:      []wgcfg.Peer{}, // TODO: add peers dynamically as they disco to us
+		Peers:      []wgcfg.Peer{},
 	}
 	if lb.serverPub.IsZero() {
 		// We're the server.
@@ -742,7 +742,7 @@ func (b *locoBackend) onMeow(src key.NodePublic, discoPub key.DiscoPublic) {
 		PrivateKey: b.priv,
 		Addresses:  []netip.Prefix{b.addrPrefix, allIPv6},
 		MTU:        1280,
-		Peers:      []wgcfg.Peer{}, // TODO: add peers dynamically as they disco to us
+		Peers:      []wgcfg.Peer{},
 	}
 	for _, p := range b.clients {
 		wgConf.Peers = append(wgConf.Peers, wgcfg.Peer{
