@@ -3,8 +3,6 @@
 
 package main
 
-// TODO: in dev derp mode: 2023/09/14 21:26:25 magicsock: last netcheck reported send error. Rebinding.
-
 import (
 	"cmp"
 	"context"
