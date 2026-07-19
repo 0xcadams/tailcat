@@ -331,15 +331,14 @@ func clientSOCKSMode(logf logger.Logf) {
 	ss := &socks5.Server{
 		Logf: logger.WithPrefix(logf, "socks5: "),
 		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			_, port, err := net.SplitHostPort(addr)
+			dst, err := classifySOCKSAddr(ctx, lookupNetIP, addr)
 			if err != nil {
 				return nil, err
 			}
-			portNum, err := strconv.ParseUint(port, 10, 16)
-			if err != nil {
-				return nil, err
+			if dst.toServer {
+				return cl.DialTCPPort(ctx, dst.port)
 			}
-			return cl.DialTCPPort(ctx, uint16(portNum))
+			return cl.DialTCP(ctx, dst.dst)
 		},
 	}
 	go func() {
@@ -357,6 +356,58 @@ func clientSOCKSMode(logf logger.Logf) {
 	if err := cmd.Run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// socksTarget is where a SOCKS5 destination address should be dialed.
+type socksTarget struct {
+	toServer bool           // dial the tailcat server itself
+	port     uint16         // the port to dial, if toServer
+	dst      netip.AddrPort // the IP:port to dial through the server as an exit node, if !toServer
+}
+
+// lookupNetIP resolves host using the local resolver, for
+// [classifySOCKSAddr].
+func lookupNetIP(ctx context.Context, host string) ([]netip.Addr, error) {
+	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+}
+
+// classifySOCKSAddr decides where the SOCKS5 destination addr should be
+// dialed. The magic hostname "server.tailcat" (or an empty host) means the
+// tailcat server itself. IP literals and hostnames resolved with lookup are
+// reached through the server acting as an exit node, preferring IPv4
+// addresses because they ride the NAT64 mapping and the server may not have
+// IPv6 connectivity.
+func classifySOCKSAddr(ctx context.Context, lookup func(context.Context, string) ([]netip.Addr, error), addr string) (socksTarget, error) {
+	var zero socksTarget
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return zero, err
+	}
+	portNum, err := strconv.ParseUint(port, 10, 16)
+	if err != nil {
+		return zero, err
+	}
+	if host == "server.tailcat" || host == "" {
+		return socksTarget{toServer: true, port: uint16(portNum)}, nil
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		ips, err := lookup(ctx, host)
+		if err != nil {
+			return zero, err
+		}
+		if len(ips) == 0 {
+			return zero, fmt.Errorf("no addresses found for %q", host)
+		}
+		ip = ips[0]
+		for _, a := range ips {
+			if a.Unmap().Is4() {
+				ip = a
+				break
+			}
+		}
+	}
+	return socksTarget{dst: netip.AddrPortFrom(ip.Unmap(), uint16(portNum))}, nil
 }
 
 func clientParseMode(logf logger.Logf) {
