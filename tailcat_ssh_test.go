@@ -60,20 +60,7 @@ func setupSSHEnv(t *testing.T) *testSSHEnv {
 	}
 	t.Cleanup(func() { client.Close() })
 
-	// The DERP connections establish lazily; retry the ping until the
-	// meow/meowed handshake succeeds.
-	var pingErr error
-	for range 10 {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_, pingErr = client.Ping(ctx)
-		cancel()
-		if pingErr == nil {
-			break
-		}
-	}
-	if pingErr != nil {
-		t.Fatalf("Ping: %v", pingErr)
-	}
+	tailcat.PingForTest(t, srv, client)
 
 	return &testSSHEnv{client: client}
 }
@@ -101,6 +88,8 @@ func (e *testSSHEnv) sshClient(t *testing.T) *gossh.Client {
 }
 
 func TestSSHSuite(t *testing.T) {
+	t.Parallel()
+
 	env := setupSSHEnv(t)
 
 	t.Run("ExecSimple", func(t *testing.T) {

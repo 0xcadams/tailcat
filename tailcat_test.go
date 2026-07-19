@@ -5,6 +5,7 @@ package tailcat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -32,6 +33,8 @@ func mkLogger(t testing.TB, name string) logger.Logf {
 }
 
 func TestTailcat(t *testing.T) {
+	t.Parallel()
+
 	dm := integration.RunDERPAndSTUN(t, mkLogger(t, "derpstun"), "127.0.0.1")
 	t.Logf("DERPMap: %v", logger.AsJSON(dm))
 
@@ -65,13 +68,13 @@ func TestTailcat(t *testing.T) {
 			c.Close()
 		}
 	}
+	// Start with a non-matching allowlist entry so the first ping can verify
+	// that disallowed clients get no acknowledgement.
+	s.AddAllowedClient(key.NewNode().Public())
 
 	if err := s.Start(); err != nil {
 		t.Fatalf("server Start: %v", err)
 	}
-
-	// Give the server time to connect to the DERP relay.
-	time.Sleep(2 * time.Second)
 
 	c, err := NewClient(mkLogger(t, "client"), s.ConnBlobForTest(), key.NewNode())
 	if err != nil {
@@ -81,16 +84,21 @@ func TestTailcat(t *testing.T) {
 
 	t.Logf("Client is %v", c.PublicKey())
 
-	pi, err := c.Ping(context.Background())
-	if err != nil {
-		t.Fatalf("Ping: %v", err)
+	WaitForDERPForTest(t, s, c)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	if _, err := c.Ping(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Ping from disallowed client = %v; want context deadline exceeded", err)
 	}
+	cancel()
+	s.AddAllowedClient(c.PublicKey())
+
+	pi := PingForTest(t, s, c)
 	t.Logf("got ping: %+v", pi)
 
 	// No sleep here: a successful Ping means the server has fully
 	// added us as a peer and we may dial immediately.
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	conn, err := c.DialTCPPort(ctx, 80)
 	if err != nil {
@@ -113,6 +121,8 @@ func TestTailcat(t *testing.T) {
 // still be able to send its response after seeing the client's EOF,
 // netcat style.
 func TestHalfClose(t *testing.T) {
+	t.Parallel()
+
 	dm := integration.RunDERPAndSTUN(t, mkLogger(t, "derpstun"), "127.0.0.1")
 	reg := dm.Regions[1]
 	if reg == nil {
@@ -164,17 +174,12 @@ func TestHalfClose(t *testing.T) {
 		t.Fatalf("server Start: %v", err)
 	}
 
-	// Give the server time to connect to the DERP relay.
-	time.Sleep(2 * time.Second)
-
 	c, err := NewClient(mkLogger(t, "client"), s.ConnBlobForTest(), key.NewNode())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
 	t.Cleanup(func() { c.Close() })
-	if _, err := c.Ping(context.Background()); err != nil {
-		t.Fatalf("Ping: %v", err)
-	}
+	PingForTest(t, s, c)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -208,7 +213,7 @@ func TestHalfClose(t *testing.T) {
 	// ports before they reach OnTCP, whose handler above would accept
 	// any port. A filter drop is silent, so the dial must ride out
 	// the context deadline rather than fail fast with a RST.
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel2()
 	c2, err := c.DialTCPPort(ctx2, 81)
 	if err == nil {
