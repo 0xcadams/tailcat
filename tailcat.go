@@ -166,6 +166,11 @@ type locoBackend struct {
 	serverPub  key.NodePublic // non-zero if we're a client (server's public key)
 	isServer   bool
 
+	// discoPublic returns the node's disco public key, memoized to
+	// avoid redoing the curve25519 derivation for every client that
+	// joins.
+	discoPublic func() key.DiscoPublic
+
 	// onDERPRecv is called for non-disco DERP packets before the
 	// peer map lookup. Set before createEngine.
 	onDERPRecv func(regionID int, src key.NodePublic, pkt []byte) bool
@@ -439,6 +444,9 @@ func newLocoBackend(priv key.NodePrivate) *locoBackend {
 		addr:       addr,
 		addrPrefix: addrPrefix,
 	}
+	lb.discoPublic = sync.OnceValue(func() key.DiscoPublic {
+		return nodePrivateAsDiscoPrivate(lb.priv).Public()
+	})
 	return lb
 }
 
@@ -861,7 +869,7 @@ func (b *locoBackend) onMeow(src key.NodePublic, discoPub key.DiscoPublic) bool 
 			Name:       "server.tailcat.",
 			User:       100,
 			Key:        b.pub,
-			DiscoKey:   nodePrivateAsDiscoPrivate(b.priv).Public(), // TODO: cache
+			DiscoKey:   b.discoPublic(),
 			Addresses:  []netip.Prefix{b.addrPrefix},
 			AllowedIPs: []netip.Prefix{b.addrPrefix, allIPv6},
 			HomeDERP:   derpRegion,
