@@ -252,8 +252,12 @@ func runWithPipes(sess ssh.Session, cmd *exec.Cmd) {
 		io.Copy(sess.Stderr(), stderrPipe)
 	}()
 
-	err = cmd.Wait()
+	// Drain stdout/stderr before calling Wait: Wait closes the pipes
+	// once the process exits, racing the copies and sometimes losing
+	// the output of fast-exiting commands. (The copies finish on
+	// their own: the pipes read EOF when the process exits.)
 	<-outputDone
+	err = cmd.Wait()
 
 	if err != nil {
 		sess.Exit(exitCode(err))
