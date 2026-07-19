@@ -37,7 +37,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -608,7 +607,6 @@ func (lb *locoBackend) Start() error {
 		NodeKey: lb.pub,
 	}
 	if lb.serverPub.IsZero() {
-		nm.SSHPolicy = lb.sshPolicy()
 		// We're the server. (hence the serverPub is zero)
 		nm.SelfNode = (&tailcfg.Node{
 			ID:         1,
@@ -713,8 +711,7 @@ func (b *locoBackend) onMeow(src key.NodePublic, discoPub key.DiscoPublic) {
 	})
 
 	nm := &netmap.NetworkMap{
-		NodeKey:   b.pub,
-		SSHPolicy: b.sshPolicy(),
+		NodeKey: b.pub,
 		SelfNode: (&tailcfg.Node{
 			ID:         1,
 			StableID:   "1",
@@ -1020,55 +1017,6 @@ func pfxOf(a netip.Addr) netip.Prefix {
 // Status returns the current WireGuard and DERP connection status.
 func (s *Server) Status() *ipnstate.Status {
 	return s.lb.Status()
-}
-
-func (b *locoBackend) Dialer() *tsdial.Dialer {
-	return b.sys.Dialer.Get()
-}
-
-func (b *locoBackend) DoNoiseRequest(req *http.Request) (*http.Response, error) {
-	return nil, errors.New("not needed")
-}
-
-func (b *locoBackend) NetMap() *netmap.NetworkMap {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.nm
-}
-
-func (b *locoBackend) NodeKey() key.NodePublic {
-	return b.pub
-}
-
-func (b *locoBackend) TailscaleVarRoot() string {
-	panic("unused") // only needed by upstream tailssh for session recording
-}
-
-func (b *locoBackend) WhoIs(proto string, ipp netip.AddrPort) (n tailcfg.NodeView, u tailcfg.UserProfile, ok bool) {
-	nv := (&tailcfg.Node{
-		ID:       1,
-		StableID: "one",
-		User:     100,
-	}).View()
-	up := tailcfg.UserProfile{
-		DisplayName: "Peer",
-	}
-	return nv, up, true
-}
-
-func (b *locoBackend) sshPolicy() *tailcfg.SSHPolicy {
-	return &tailcfg.SSHPolicy{
-		Rules: []*tailcfg.SSHRule{
-			{
-				Principals: []*tailcfg.SSHPrincipal{{Any: true}},
-				SSHUsers:   map[string]string{"*": os.Getenv("USER")},
-				Action: &tailcfg.SSHAction{
-					Message: "\nWelcome to Tailcat SSH.\n\n",
-					Accept:  true,
-				},
-			},
-		},
-	}
 }
 
 // nodePrivateAsDiscoPrivate converts a NodePrivate to a DiscoPrivate by

@@ -7,8 +7,6 @@ package tailcat
 
 import (
 	"net"
-
-	"golang.org/x/crypto/ssh"
 )
 
 // SupportsSSHServer reports whether the platform supports running the built-in
@@ -17,8 +15,4 @@ func SupportsSSHServer() bool { return false }
 
 func (s *Server) HandleTailscaleSSHConn(c net.Conn) {
 	c.Close()
-}
-
-func (b *locoBackend) GetSSH_HostKeys() (ret []ssh.Signer, err error) {
-	return nil, nil
 }

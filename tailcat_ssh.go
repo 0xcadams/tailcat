@@ -223,7 +223,6 @@ func runWithPipes(sess ssh.Session, cmd *exec.Cmd) {
 		return
 	}
 
-	var processDone atomic.Bool
 	go func() {
 		defer stdinPipe.Close()
 		io.Copy(stdinPipe, sess)
@@ -247,7 +246,6 @@ func runWithPipes(sess ssh.Session, cmd *exec.Cmd) {
 	}()
 
 	err = cmd.Wait()
-	processDone.Store(true)
 	<-outputDone
 
 	if err != nil {
