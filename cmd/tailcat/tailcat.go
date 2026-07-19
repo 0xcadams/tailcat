@@ -680,7 +680,7 @@ func runDevDERP(logf logger.Logf) *tailcfg.DERPRegion {
 				HostName:         "T",
 				IPv4:             "127.0.0.1",
 				IPv6:             "-",
-				STUNPort:         0, // default (TODO: actually run a STUN server in this func)
+				STUNPort:         -1, // no STUN server in dev DERP mode
 				DERPPort:         httpsrv.Listener.Addr().(*net.TCPAddr).Port,
 				InsecureForTests: true,
 			},
