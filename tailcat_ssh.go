@@ -171,17 +171,24 @@ func runWithPTY(sess ssh.Session, cmd *exec.Cmd, ptyReq ssh.Pty, winCh <-chan ss
 	}
 	tty.Close() // child owns the tty now
 
-	// Handle window size changes.
-	go func() {
-		for win := range winCh {
-			unix.IoctlSetWinsize(int(ptmx.Fd()), syscall.TIOCSWINSZ, &unix.Winsize{
-				Row:    uint16(win.Height),
-				Col:    uint16(win.Width),
-				Xpixel: uint16(win.WidthPixels),
-				Ypixel: uint16(win.HeightPixels),
-			})
-		}
-	}()
+	// Handle window size changes. The goroutine runs until gliderssh
+	// closes winCh, which happens only once the whole session channel
+	// shuts down, after this function has returned and closed ptmx. It
+	// therefore gets its own duplicated file descriptor rather than
+	// racing the deferred ptmx.Close (and whatever reuses that fd).
+	if winchFd, err := unix.Dup(int(ptmx.Fd())); err == nil {
+		go func() {
+			defer unix.Close(winchFd)
+			for win := range winCh {
+				unix.IoctlSetWinsize(winchFd, syscall.TIOCSWINSZ, &unix.Winsize{
+					Row:    uint16(win.Height),
+					Col:    uint16(win.Width),
+					Xpixel: uint16(win.WidthPixels),
+					Ypixel: uint16(win.HeightPixels),
+				})
+			}
+		}()
+	}
 
 	// I/O: session ↔ pty master.
 	go func() {
