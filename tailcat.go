@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -1029,6 +1030,41 @@ func (c *Client) DialTCP(ctx context.Context, ap netip.AddrPort) (net.Conn, erro
 
 func pfxOf(a netip.Addr) netip.Prefix {
 	return netip.PrefixFrom(a, a.BitLen())
+}
+
+// closeWriter is implemented by TCP-like connections (such as
+// [net.TCPConn] and gVisor's gonet.TCPConn) that can shut down just
+// their writing side.
+type closeWriter interface {
+	CloseWrite() error
+}
+
+// ProxyConns copies data between a and b in both directions until
+// both sides have finished, then closes both connections.
+//
+// When one direction's copy finishes (its source reached EOF), the
+// destination gets a write shutdown via CloseWrite if supported,
+// propagating the TCP half-close instead of tearing down the whole
+// connection. This lets protocols where one side signals
+// end-of-request with a FIN and then reads the response (netcat
+// style) work through the proxy.
+func ProxyConns(a, b net.Conn) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	cp := func(dst, src net.Conn) {
+		defer wg.Done()
+		io.Copy(dst, src)
+		if cw, ok := dst.(closeWriter); ok {
+			cw.CloseWrite()
+		} else {
+			dst.Close()
+		}
+	}
+	go cp(a, b)
+	go cp(b, a)
+	wg.Wait()
+	a.Close()
+	b.Close()
 }
 
 // Status returns the current WireGuard and DERP connection status.

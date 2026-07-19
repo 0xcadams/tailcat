@@ -5,6 +5,7 @@ package tailcat
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -105,6 +106,107 @@ func TestTailcat(t *testing.T) {
 		t.Fatalf("DialTCP = %v, %v", conn, err)
 	}
 
+}
+
+// TestHalfClose tests that a client's write shutdown (CloseWrite)
+// propagates through the server's TCP proxying as a half-close
+// rather than tearing down the whole connection: the backend must
+// still be able to send its response after seeing the client's EOF,
+// netcat style.
+func TestHalfClose(t *testing.T) {
+	dm := integration.RunDERPAndSTUN(t, mkLogger(t, "derpstun"), "127.0.0.1")
+	reg := dm.Regions[1]
+	if reg == nil {
+		t.Fatal("no region 1 in derpmap")
+	}
+
+	// The backend reads until EOF and only then writes its response.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				got, err := io.ReadAll(c)
+				if err != nil {
+					t.Logf("backend read: %v", err)
+					return
+				}
+				fmt.Fprintf(c, "read %d bytes", len(got))
+			}()
+		}
+	}()
+
+	s, err := NewServer(key.NewNode(), mkLogger(t, "server"), reg)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	s.OnTCP = func(port uint16) (handler func(net.Conn)) {
+		return func(c net.Conn) {
+			backend, err := net.Dial("tcp", ln.Addr().String())
+			if err != nil {
+				t.Logf("backend dial: %v", err)
+				c.Close()
+				return
+			}
+			ProxyConns(c, backend)
+		}
+	}
+	if err := s.Start(); err != nil {
+		t.Fatalf("server Start: %v", err)
+	}
+
+	// Give the server time to connect to the DERP relay.
+	time.Sleep(2 * time.Second)
+
+	c, err := NewClient(mkLogger(t, "client"), s.ConnBlobForTest(), key.NewNode())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	t.Cleanup(func() { c.Close() })
+	if err := c.Start(); err != nil {
+		t.Fatalf("client Start: %v", err)
+	}
+	if _, err := c.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+	time.Sleep(1 * time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := c.DialTCPPort(ctx, 80)
+	if err != nil {
+		t.Fatalf("DialTCPPort: %v", err)
+	}
+	defer conn.Close()
+
+	const req = "hello, backend"
+	if _, err := io.WriteString(conn, req); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cw, ok := conn.(interface{ CloseWrite() error })
+	if !ok {
+		t.Fatalf("conn type %T doesn't support CloseWrite", conn)
+	}
+	if err := cw.CloseWrite(); err != nil {
+		t.Fatalf("CloseWrite: %v", err)
+	}
+
+	resp, err := io.ReadAll(conn)
+	if err != nil {
+		t.Fatalf("reading response after half-close: %v", err)
+	}
+	if want := fmt.Sprintf("read %d bytes", len(req)); string(resp) != want {
+		t.Fatalf("response = %q; want %q", resp, want)
+	}
 }
 
 func TestConnBlob(t *testing.T) {

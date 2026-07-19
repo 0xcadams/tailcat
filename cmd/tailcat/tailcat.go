@@ -462,23 +462,13 @@ func server(logf logger.Logf) {
 
 	tcpForwardTo := func(ipPortStr string) func(net.Conn) {
 		return func(c net.Conn) {
-			defer c.Close()
 			localConn, err := net.Dial("tcp", ipPortStr)
 			if err != nil {
 				logf("error proxying to %v: %v", ipPortStr, err)
+				c.Close()
 				return
 			}
-			defer localConn.Close()
-			errc := make(chan error, 1)
-			go func() {
-				_, err := io.Copy(c, localConn)
-				errc <- err
-			}()
-			go func() {
-				_, err := io.Copy(localConn, c)
-				errc <- err
-			}()
-			<-errc
+			tailcat.ProxyConns(c, localConn)
 		}
 	}
 
