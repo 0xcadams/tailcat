@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -39,6 +40,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/set"
+	"tailscale.com/wgengine/filter"
 )
 
 var (
@@ -446,6 +448,17 @@ func server(logf logger.Logf) {
 	if services.Contains("no-auth-ssh") && !tailcat.SupportsSSHServer() {
 		log.Fatalf("Tailscale SSH server not supported on %v", runtime.GOOS)
 	}
+	// With an explicit port list (and no exit-node mode, which accepts
+	// any port), tighten the packet filter to just those ports for
+	// defense in depth behind the OnTCP gate. An empty port list means
+	// the accept-one-connection-on-any-port stdout mode.
+	if len(portSet) > 0 && !services.Contains("exit-node") {
+		ports := slices.Sorted(maps.Keys(portSet))
+		if services.Contains("no-auth-ssh") && !portSet.Contains(22) {
+			ports = append([]uint16{22}, ports...)
+		}
+		s.ServedTCPPorts = portRanges(ports)
+	}
 	if *flagAllow != "" {
 		for _, ks := range strings.Split(*flagAllow, ",") {
 			if ks == "none" {
@@ -594,6 +607,19 @@ func parsePortSet(s string) (ports set.Set[uint16], services set.Set[string], _ 
 		}
 	}
 	return ret, services, nil
+}
+
+// portRanges coalesces the ascending-sorted ports into contiguous
+// port ranges.
+func portRanges(sorted []uint16) (ret []filter.PortRange) {
+	for _, p := range sorted {
+		if n := len(ret); n > 0 && ret[n-1].Last+1 == p {
+			ret[n-1].Last = p
+			continue
+		}
+		ret = append(ret, filter.PortRange{First: p, Last: p})
+	}
+	return ret
 }
 
 func runDevDERP(logf logger.Logf) *tailcfg.DERPRegion {

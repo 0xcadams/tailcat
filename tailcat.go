@@ -47,6 +47,7 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	go4mem "go4.org/mem"
+	"go4.org/netipx"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
@@ -59,9 +60,11 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsd"
+	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/netmap"
+	"tailscale.com/types/views"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/mak"
 	"tailscale.com/wgengine"
@@ -221,8 +224,23 @@ type Server struct {
 	// This only applies to connections relayed through the server and not to the server
 	// itself. See OnTCP for direct connections to the server.
 	//
-	// It must be set before calling Start.
+	// It must be set before calling Start. Setting it also widens the
+	// packet filter installed at Start to admit traffic to any
+	// destination, not just the server's own address.
 	OnTCPForward func(netip.AddrPort) (handler func(net.Conn))
+
+	// ServedTCPPorts, if non-nil, restricts which TCP ports on the
+	// server's own address the packet filter admits new inbound
+	// connections to. If nil, connections to all ports reach OnTCP,
+	// which remains the per-port gate either way. Callers that know
+	// their served ports statically (like the tailcat CLI) can set
+	// this for defense in depth.
+	//
+	// Unlike OnTCP's nil-handler response, packets dropped by the
+	// filter get no RST; a client dialing a filtered port times out.
+	//
+	// It must be set before calling Start.
+	ServedTCPPorts []filter.PortRange
 }
 
 // NewServer creates a new server with the given node private key, using the
@@ -314,7 +332,9 @@ func NewServer(priv key.NodePrivate, logf logger.Logf, regs ...*tailcfg.DERPRegi
 	sys.Set(ns)
 
 	e := sys.Engine.Get()
-	e.SetFilter(filter.NewAllowAllForTest(logf)) // TODO: trashy
+	// Reject all inbound traffic until Start installs the real filter,
+	// built from what the server is configured to serve.
+	e.SetFilter(filter.NewAllowNone(logf, nil))
 	dialer.UseNetstackForIP = func(ip netip.Addr) bool {
 		_, ok := lb.peerByIP(ip)
 		return ok
@@ -331,11 +351,54 @@ func NewServer(priv key.NodePrivate, logf logger.Logf, regs ...*tailcfg.DERPRegi
 	return srv, nil
 }
 
+var allTCPPorts = filter.PortRange{First: 0, Last: 65535}
+
+// buildFilter returns the packet filter enforcing what the server is
+// configured to serve: new inbound TCP connections are admitted only
+// to the server's own address (limited to ServedTCPPorts if set),
+// plus to any destination when OnTCPForward is set (exit node mode).
+// Everything else from the tunnel is dropped before reaching
+// netstack; the OnTCP/OnTCPForward callbacks remain the
+// per-connection gates behind it.
+func (s *Server) buildFilter() *filter.Filter {
+	lb := s.lb
+
+	selfPorts := []filter.PortRange{allTCPPorts}
+	if s.ServedTCPPorts != nil {
+		selfPorts = s.ServedTCPPorts
+	}
+	var selfDsts []filter.NetPortRange
+	for _, pr := range selfPorts {
+		selfDsts = append(selfDsts, filter.NetPortRange{Net: lb.addrPrefix, Ports: pr})
+	}
+	matches := []filter.Match{{
+		IPProto: views.SliceOf([]ipproto.Proto{ipproto.TCP}),
+		Srcs:    []netip.Prefix{allIPv6},
+		Dsts:    selfDsts,
+	}}
+
+	var localNets netipx.IPSetBuilder
+	localNets.AddPrefix(lb.addrPrefix)
+	if s.OnTCPForward != nil {
+		localNets.AddPrefix(allIPv6)
+		matches = append(matches, filter.Match{
+			IPProto: views.SliceOf([]ipproto.Proto{ipproto.TCP}),
+			Srcs:    []netip.Prefix{allIPv6},
+			Dsts:    []filter.NetPortRange{{Net: allIPv6, Ports: allTCPPorts}},
+		})
+	}
+	local, _ := localNets.IPSet()
+	return filter.New(matches, nil, local, nil, nil, lb.logf)
+}
+
 // Addr returns the server's IPv6 address derived from its public key.
 func (s *Server) Addr() netip.Addr { return s.lb.addr }
 
 // Start connects to the DERP relay and begins accepting clients.
-func (s *Server) Start() error { return s.lb.Start() }
+func (s *Server) Start() error {
+	s.lb.sys.Engine.Get().SetFilter(s.buildFilter())
+	return s.lb.Start()
+}
 
 // Close shuts down the server, closing the WireGuard engine and DERP connections.
 func (s *Server) Close() error { return s.lb.Close() }
@@ -925,7 +988,14 @@ func NewClient(logf logger.Logf, server ConnBlob, priv key.NodePrivate) (*Client
 	sys.Set(ns)
 
 	e := sys.Engine.Get()
-	e.SetFilter(filter.NewAllowAllForTest(logf)) // TODO: trashy
+	// The client accepts no new inbound connections at all: the filter
+	// admits only continuations of client-initiated TCP flows (the
+	// filter always passes non-SYN TCP segments to addresses in its
+	// local set, and outbound traffic is never filtered).
+	localNets := new(netipx.IPSetBuilder)
+	localNets.AddPrefix(lb.addrPrefix)
+	local, _ := localNets.IPSet()
+	e.SetFilter(filter.New(nil, nil, local, nil, nil, logf))
 	dialer.UseNetstackForIP = func(ip netip.Addr) bool {
 		_, ok := lb.peerByIP(ip)
 		return ok

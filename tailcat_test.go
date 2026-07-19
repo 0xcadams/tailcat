@@ -18,6 +18,7 @@ import (
 	"tailscale.com/tstest/integration"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/wgengine/filter"
 )
 
 func mkLogger(t testing.TB, name string) logger.Logf {
@@ -160,6 +161,7 @@ func TestHalfClose(t *testing.T) {
 			ProxyConns(c, backend)
 		}
 	}
+	s.ServedTCPPorts = []filter.PortRange{{First: 80, Last: 80}}
 	if err := s.Start(); err != nil {
 		t.Fatalf("server Start: %v", err)
 	}
@@ -206,6 +208,21 @@ func TestHalfClose(t *testing.T) {
 	}
 	if want := fmt.Sprintf("read %d bytes", len(req)); string(resp) != want {
 		t.Fatalf("response = %q; want %q", resp, want)
+	}
+
+	// The packet filter (ServedTCPPorts) must drop SYNs to unserved
+	// ports before they reach OnTCP, whose handler above would accept
+	// any port. A filter drop is silent, so the dial must ride out
+	// the context deadline rather than fail fast with a RST.
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel2()
+	c2, err := c.DialTCPPort(ctx2, 81)
+	if err == nil {
+		c2.Close()
+		t.Fatal("dial to filtered port 81 unexpectedly succeeded")
+	}
+	if ctx2.Err() == nil {
+		t.Fatalf("dial to filtered port 81 failed fast (%v); want silent drop until context deadline", err)
 	}
 }
 
