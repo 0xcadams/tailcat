@@ -44,7 +44,7 @@ import (
 var (
 	flagServe   = flag.String("serve", "", "comma-separated list of port numbers, port ranges, or service names to serve. Service names are: 'all' (serve all ports), 'exit-node' (run an exit node for all addresses), 'no-auth-ssh' (auth-free SSH server). If empty, it listens only on port 0 and writes to stdout.")
 	flagKey     = flag.String("key", "", "'new' for an ephemeral one, '' for the 'default' key (if it exists), else a new key. Otherwise the path to a *.private.json or a name like 'foo' to read it from $CONFIG/tailcat/keys/foo.private.json")
-	flagAllow   = flag.String("allow", "", "comma-separated list of public keys to allow access to the server")
+	flagAllow   = flag.String("allow", "", "comma-separated list of public keys to allow access to the server, or 'none' to allow no clients. If empty, all clients are allowed.")
 	flagVerbose = flag.Bool("verbose", false, "be verbose")
 	flagJSON    = flag.Bool("json", false, "in server mode, write {\"listenAddr\": ...} JSON to stdout")
 )
@@ -98,6 +98,25 @@ as 'all_proxy' environment variable to a child process:
 
 	tailcat socks <addrblob> <cmd> [args...]
 	tailcat socks <addrblob> curl http://server.tailcat:8081/
+
+Parse an address blob and print its contents as JSON:
+
+	tailcat parse <addrblob>
+
+Print the public key of the client key that would be used (see --key):
+
+	tailcat printpub
+
+Generate and save a persistent server key and print its address blob
+(run "tailcat genkey -h" for its flags):
+
+	tailcat genkey [-key=<name>] [-force]
+
+Environment:
+
+	TAILCAT_ADDR_FILE: in server mode, write the address blob to the
+	given file path or, with a "tcp:" prefix, send it to that TCP
+	address.
 
 Flags:
 
