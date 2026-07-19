@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/netip"
 	"os"
+	"os/exec"
 	"strings"
 	"syscall"
 
@@ -45,8 +46,12 @@ func clientSSHMode(logf logger.Logf) {
 	if err != nil {
 		log.Fatal(err)
 	}
+	sshExe, err := exec.LookPath("ssh")
+	if err != nil {
+		log.Fatalf("no ssh client found in $PATH: %v", err)
+	}
 	argv := []string{
-		"/usr/bin/ssh",
+		sshExe,
 		"-o", "UpdateHostKeys no",
 		"-o", "StrictHostKeyChecking no",
 		"-o", "UserKnownHostsFile /dev/null",
@@ -55,6 +60,6 @@ func clientSSHMode(logf logger.Logf) {
 		dst,
 	}
 	argv = append(argv, cmdArgs...)
-	err = syscall.Exec("/usr/bin/ssh", argv, os.Environ())
+	err = syscall.Exec(sshExe, argv, os.Environ())
 	log.Fatalf("failed to exec: %v", err)
 }
