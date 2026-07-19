@@ -276,39 +276,27 @@ func clientMode(logf logger.Logf, connStr, optDest string) {
 	if err != nil {
 		log.Fatalf("Dial: %v", err)
 	}
-	rxErr := make(chan error, 1)
-	txErr := make(chan error, 1)
-	go func() {
-		_, err := io.Copy(os.Stdout, c)
-		rxErr <- err
-	}()
 	go func() {
 		_, err := io.Copy(c, os.Stdin)
 		if err != nil {
 			log.Fatal(err)
 		}
+		// Half-close: tell the server we're done sending so it can
+		// respond to a complete request, netcat style.
 		if err := c.(*gonet.TCPConn).CloseWrite(); err != nil {
 			log.Fatal(err)
 		}
-		// TODO(bradfitz): figure out more why this trashy sleep is required. It
-		// seems that without it, our CloseWrite above never makes it out onto
-		// the network (no OS kernel to deal with it async after we os.Exit!).
-		// So we need to give it some time to send via DERP, etc. But where
-		// exactly is the buffering happening? The magicsock derp conn send,
-		// almost certainly. Maybe we can ask magicsock for its tx count before
-		// the CloseWrite and then wait for it to change, and then exit?
-		// But even then, do we want an ACK for our RST? Can we ask gvisor for
-		// that? Poll the gonet.TCPConn status or something?
-		time.Sleep(500 * time.Millisecond)
-		txErr <- nil
 	}()
 
-	// TODO(bradfitz): probably more here
-	select {
-	case <-txErr:
-	case <-rxErr:
+	// Exit when the server finishes sending. Its close also confirms
+	// delivery of everything we sent, including the half-close FIN
+	// above: the whole network stack is in this userspace process, so
+	// there's no kernel to flush unsent packets after we exit, and
+	// exiting earlier (as this code once did, after a hopeful sleep)
+	// can lose data in flight in either direction.
+	if _, err := io.Copy(os.Stdout, c); err != nil {
+		log.Fatal(err)
 	}
-	return
 }
 
 func clientSOCKSMode(logf logger.Logf) {
