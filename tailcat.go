@@ -315,7 +315,7 @@ func NewServer(priv key.NodePrivate, logf logger.Logf, regs ...*tailcfg.DERPRegi
 	e := sys.Engine.Get()
 	e.SetFilter(filter.NewAllowAllForTest(logf)) // TODO: trashy
 	dialer.UseNetstackForIP = func(ip netip.Addr) bool {
-		_, ok := e.PeerForIP(ip)
+		_, ok := lb.peerByIP(ip)
 		return ok
 	}
 	dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
@@ -589,6 +589,45 @@ func PickBestRegion(ctx context.Context, dm *tailcfg.DERPMap) (regionID int, err
 
 var allIPv6 = netip.MustParsePrefix("::/0")
 
+// peerAllowedIPs returns the prefixes that the peer with public key k
+// is allowed to originate traffic from. It is the engine's per-peer
+// WireGuard config source (see [wgengine.Engine.SetPeerConfigFunc]).
+func (b *locoBackend) peerAllowedIPs(k key.NodePublic) (allowedIPs []netip.Prefix, ok bool) {
+	if !b.serverPub.IsZero() {
+		// We're the client; the server is our only peer and may send
+		// from any address (it can act as an exit node).
+		if k == b.serverPub {
+			return []netip.Prefix{pfxOf(tcAddrForKey(k)), allIPv6}, true
+		}
+		return nil, false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n, ok := b.clients[k]
+	if !ok {
+		return nil, false
+	}
+	return n.AllowedIPs, true
+}
+
+// peerByIP returns the public key of the peer that outbound packets
+// addressed to dst should be sent to (see
+// [wgengine.Engine.SetPeerByIPPacketFunc]).
+func (b *locoBackend) peerByIP(dst netip.Addr) (_ key.NodePublic, ok bool) {
+	if !b.serverPub.IsZero() {
+		// We're the client; all traffic goes to the server.
+		return b.serverPub, true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for k := range b.clients {
+		if tcAddrForKey(k) == dst {
+			return k, true
+		}
+	}
+	return key.NodePublic{}, false
+}
+
 func (lb *locoBackend) Start() error {
 	if err := lb.ns.Start(nil /* no LocalBackend */); err != nil {
 		return fmt.Errorf("failed to start netstack: %w", err)
@@ -650,27 +689,24 @@ func (lb *locoBackend) Start() error {
 	lb.nm = nm
 	lb.mu.Unlock()
 
-	e.SetNetworkMap(nm)
 	mc.SetNetworkMap(nm.SelfNode, nm.Peers)
 	lb.sys.Netstack.Get().UpdateNetstackIPs(nm)
 	mc.SetNetworkUp(true)
 	lb.logf("NetworkMap: %v", logger.AsJSON(nm))
 
+	// Install the live per-peer config sources. WireGuard peers are
+	// created lazily from these as traffic arrives; there is no
+	// peer list in wgcfg.Config anymore.
+	e.SetPeerConfigFunc(lb.peerAllowedIPs)
+	e.SetPeerByIPPacketFunc(lb.peerByIP)
+
 	wgConf := &wgcfg.Config{
 		PrivateKey: lb.priv,
 		Addresses:  []netip.Prefix{lb.addrPrefix},
-		MTU:        1280,
-		Peers:      []wgcfg.Peer{},
 	}
 	if lb.serverPub.IsZero() {
 		// We're the server.
 		wgConf.Addresses = append(wgConf.Addresses, allIPv6)
-	} else {
-		// We're the client. Add our server as a peer.
-		wgConf.Peers = append(wgConf.Peers, wgcfg.Peer{
-			PublicKey:  lb.serverPub,
-			AllowedIPs: nm.Peers[0].AllowedIPs().AsSlice(),
-		})
 	}
 	routerConf := &router.Config{
 		LocalAddrs: []netip.Prefix{lb.addrPrefix},
@@ -732,31 +768,13 @@ func (b *locoBackend) onMeow(src key.NodePublic, discoPub key.DiscoPublic) {
 	})
 	b.nm = nm
 
-	eng := b.sys.Engine.Get()
 	mc := b.sys.MagicSock.Get()
-	eng.SetNetworkMap(nm)
 	mc.SetNetworkMap(nm.SelfNode, nm.Peers)
 	b.sys.Netstack.Get().UpdateNetstackIPs(nm)
 
-	wgConf := &wgcfg.Config{
-		PrivateKey: b.priv,
-		Addresses:  []netip.Prefix{b.addrPrefix, allIPv6},
-		MTU:        1280,
-		Peers:      []wgcfg.Peer{},
-	}
-	for _, p := range b.clients {
-		wgConf.Peers = append(wgConf.Peers, wgcfg.Peer{
-			PublicKey:  p.Key,
-			AllowedIPs: p.AllowedIPs,
-		})
-	}
-	routerConf := &router.Config{
-		LocalAddrs: []netip.Prefix{b.addrPrefix},
-	}
-	dnsConf := &dns.Config{}
-	if err := eng.Reconfig(wgConf, routerConf, dnsConf); err != nil {
-		panic(fmt.Sprintf("e.Reconfig: %v", err))
-	}
+	// No engine reconfig needed: the WireGuard device learns about the
+	// new peer lazily via the config source installed with
+	// SetPeerConfigFunc when the client's handshake arrives.
 }
 
 func (b *locoBackend) Status() *ipnstate.Status {
@@ -818,7 +836,6 @@ func createEngine(logf logger.Logf, lb *locoBackend) (err error) {
 		logf("wgengine.NewUserspaceEngine(tun %q) error: %v", "userspace-networking", err)
 		return err
 	}
-	e = wgengine.NewWatchdog(e)
 	sys.Set(e)
 	sys.NetstackRouter.Set(true)
 	return nil
@@ -909,7 +926,7 @@ func NewClient(logf logger.Logf, server ConnBlob, priv key.NodePrivate) (*Client
 	e := sys.Engine.Get()
 	e.SetFilter(filter.NewAllowAllForTest(logf)) // TODO: trashy
 	dialer.UseNetstackForIP = func(ip netip.Addr) bool {
-		_, ok := e.PeerForIP(ip)
+		_, ok := lb.peerByIP(ip)
 		return ok
 	}
 	dialer.NetstackDialTCP = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {

@@ -25,10 +25,10 @@ import (
 	"syscall"
 
 	"github.com/creack/pty"
+	ssh "github.com/tailscale/gliderssh"
 	"github.com/u-root/u-root/pkg/termios"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/sys/unix"
-	"tailscale.com/tempfork/gliderlabs/ssh"
 )
 
 // SupportsSSHServer reports whether the platform supports running the built-in
