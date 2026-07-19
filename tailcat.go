@@ -837,7 +837,7 @@ func (b *locoBackend) onMeow(src key.NodePublic, discoPub key.DiscoPublic) bool 
 	if _, ok := b.clients[src]; ok {
 		return true
 	}
-	id := len(b.clients) + 2 // server id ID 1, clients are IDs 2, 3, ...
+	id := len(b.clients) + 2 // server is ID 1, clients are IDs 2, 3, ...
 	derpRegion := b.derpRegionID()
 	mak.Set(&b.clients, src, &tailcfg.Node{
 		ID:         tailcfg.NodeID(id),
