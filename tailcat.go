@@ -85,9 +85,10 @@ var Verbose = false
 type ConnBlob string
 
 // ConnInfo describes how to reach a server: its public key and which DERP
-// relay region to use. It is serialized into a [ConnBlob] for exchange.
+// relay region to use. It is serialized into a [ConnBlob] for exchange,
+// via the wire types in wire.go.
 type ConnInfo struct {
-	ServerPublic NodePublic `cbor:"p"` // a key.NodePublic
+	ServerPublic NodePublic // a key.NodePublic
 
 	// Region, if non-empty, lists the regions of a DERPMap.
 	// Either Region or RegionID must be set. If Region is set
@@ -97,7 +98,7 @@ type ConnInfo struct {
 	// As of 2023-09-22, a maximum of 1 region may be provided.
 	// In the future, a server might advertise its presence in
 	// multiple DERP regions and clients could try them all.
-	Region []*tailcfg.DERPRegion `cbor:"r,omitempty" json:",omitempty"`
+	Region []*tailcfg.DERPRegion `json:",omitempty"`
 
 	// RegionID lists the number of one of Tailscale's provided
 	// DERP servers. If set, Region may be omitted and the ConnBlob
@@ -105,7 +106,7 @@ type ConnInfo struct {
 	// the derpmap from tailscale.com once at startup.
 	// If -1 (for use when saving a keypair to disk for reuse later), a region
 	// is selected automatically at startup based on latency.
-	RegionID int `cbor:"i,omitempty" json:",omitempty"`
+	RegionID int `json:",omitempty"`
 }
 
 // NodePublic is a wrapper around key.NodePublic just so we can have a slightly
@@ -471,32 +472,33 @@ func (lb *locoBackend) ConnBlobForTest() ConnBlob {
 }
 
 // ConnBlob serializes the ConnInfo into a compact [ConnBlob] string.
-// Some fields (RegionID, RegionCode, implicit HostNames) are zeroed before
+// It is encoded via the wire types (see wire.go), which drop the
+// DERP region fields tailcat doesn't use. Some other fields
+// (RegionID, RegionCode, implicit HostNames) are zeroed before
 // encoding to reduce size; [ParseConnBlob] restores them.
 func (ci *ConnInfo) ConnBlob() ConnBlob {
-	// Clone the DERPRegions (and their nodes) and mutate them to
-	// zero out some fields before marshalling to save some space
-	// and make the ConnBlob smaller. The same transforms are done on
-	// the way back.
-	mut := *ci
-	mut.Region = make([]*tailcfg.DERPRegion, len(ci.Region))
-	for i, r := range ci.Region {
-		r2 := r.Clone()
-		mut.Region[i] = r2
+	w := &wireConnInfo{
+		ServerPublic: ci.ServerPublic,
+		RegionID:     ci.RegionID,
+	}
+	for _, r := range ci.Region {
+		wr := wireRegionOf(r)
 
-		// Remove some fields before encoding.
-		r2.RegionID = 0
-		r2.RegionCode = ""
-		for _, n := range r2.Nodes {
+		// Remove some fields before encoding to save space. The same
+		// transforms are undone on the way back.
+		wr.RegionID = 0
+		wr.RegionCode = ""
+		for _, n := range wr.Nodes {
 			n.RegionID = 0
 			implicitHost := "derp" + n.Name + ".tailscale.com"
 			if n.HostName == implicitHost {
 				n.HostName = ""
 			}
 		}
+		w.Region = append(w.Region, wr)
 	}
 
-	x, err := cbor.Marshal(&mut)
+	x, err := cbor.Marshal(w)
 	if err != nil {
 		panic(err)
 	}
@@ -550,9 +552,16 @@ func ParseConnBlob(cb ConnBlob) (ConnInfo, error) {
 	if err != nil {
 		return zero, fmt.Errorf("base64 decode: %w", err)
 	}
-	var ci ConnInfo
-	if err := cbor.Unmarshal(x, &ci); err != nil {
+	var w wireConnInfo
+	if err := cbor.Unmarshal(x, &w); err != nil {
 		return zero, fmt.Errorf("CBOR unmarshal: %v", err)
+	}
+	ci := ConnInfo{
+		ServerPublic: w.ServerPublic,
+		RegionID:     w.RegionID,
+	}
+	for _, wr := range w.Region {
+		ci.Region = append(ci.Region, wr.derpRegion())
 	}
 	for ri, r := range ci.Region {
 		if r.RegionID == 0 {
