@@ -95,6 +95,8 @@ type ConnInfo struct {
 	// but the ConnBlob is longer.
 	//
 	// As of 2023-09-22, a maximum of 1 region may be provided.
+	// In the future, a server might advertise its presence in
+	// multiple DERP regions and clients could try them all.
 	Region []*tailcfg.DERPRegion `cbor:"r,omitempty" json:",omitempty"`
 
 	// RegionID lists the number of one of Tailscale's provided
