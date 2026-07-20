@@ -949,8 +949,10 @@ func createEngine(logf logger.Logf, lb *locoBackend) (err error) {
 		HealthTracker: sys.HealthTracker.Get(),
 		EventBus:      sys.Bus.Get(),
 		OnDERPRecv:    lb.onDERPRecv,
+		DERPAppName:   "tailcat-client",
 	}
 	if lb.isServer {
+		conf.DERPAppName = "tailcat-server"
 		// The server forces its disco key to be derived from its node key
 		// so clients can predict it from the ConnBlob without extra round trips.
 		conf.ForceDiscoKey = nodePrivateAsDiscoPrivate(lb.priv)

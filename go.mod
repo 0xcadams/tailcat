@@ -8,13 +8,14 @@ require (
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f
 	gvisor.dev/gvisor v0.0.0-20260224225140-573d5e7127a8
-	tailscale.com v1.101.0-pre.0.20260718223433-7be0054a7b1d
+	tailscale.com v1.101.0-pre.0.20260720143344-246c82a658b3
 )
 
 require (
 	github.com/creack/pty v1.1.24
 	github.com/tailscale/gliderssh v0.3.4-0.20260716005906-1a0f895faf28
 	github.com/u-root/u-root v0.14.0
+	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
 	golang.org/x/crypto v0.54.0
 	golang.org/x/sys v0.47.0
 )
@@ -91,7 +92,6 @@ require (
 	github.com/u-root/uio v0.0.0-20240224005618-d2acac8f3701 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
-	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
 	golang.org/x/exp/typeparams v0.0.0-20240314144324-c7f7c6466f7f // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
