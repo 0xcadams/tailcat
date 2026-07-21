@@ -79,6 +79,24 @@ import (
 // DERP region auto-detection (netcheck).
 var Verbose = false
 
+// DefaultDERPMapURL is the URL of the JSON-encoded [tailcfg.DERPMap]
+// that [ConnInfo.Expand] fetches when no alternate DERP map source is
+// specified via options.
+const DefaultDERPMapURL = "https://raw.githubusercontent.com/tailscale/tcmap/refs/heads/main/derpmap.json"
+
+// DERPMapURL is an option for [ConnInfo.Expand] specifying an
+// alternate URL to fetch the DERP map from instead of
+// [DefaultDERPMapURL].
+type DERPMapURL string
+
+// ExpandForServer is an option for [ConnInfo.Expand] that marks the
+// DERP map fetch as being on behalf of a tailcat server (which will
+// listen on the chosen region) rather than a client. It is sent as a
+// hint header to the DERP map server.
+var ExpandForServer expandForServer
+
+type expandForServer struct{}
+
 // ConnBlob is a compact, URL-safe string that a server gives to clients so
 // they can connect. It is the "tc"-prefixed base64url encoding of CBOR-encoded
 // [ConnInfo]. A typical ConnBlob looks like "tcomFwWC…".
@@ -515,8 +533,8 @@ func (ci *ConnInfo) ConnBlob() ConnBlob {
 // roughly what a DNS lookup is to a hostname: the resolved form is
 // longer, works offline, and pins the relay details as they were at
 // resolution time. If b already embeds its relay details, it is
-// returned unchanged.
-func (b ConnBlob) Resolve(ctx context.Context) (ConnBlob, error) {
+// returned unchanged. The opts are as documented on [ConnInfo.Expand].
+func (b ConnBlob) Resolve(ctx context.Context, opts ...any) (ConnBlob, error) {
 	ci, err := ParseConnBlob(b)
 	if err != nil {
 		return "", err
@@ -524,7 +542,7 @@ func (b ConnBlob) Resolve(ctx context.Context) (ConnBlob, error) {
 	if len(ci.Region) > 0 {
 		return b, nil
 	}
-	if err := ci.Expand(ctx, false); err != nil {
+	if err := ci.Expand(ctx, opts...); err != nil {
 		return "", err
 	}
 	// Keep the blob short: two relay nodes suffice, and their IPv6
@@ -582,11 +600,33 @@ func ParseConnBlob(cb ConnBlob) (ConnInfo, error) {
 	return ci, nil
 }
 
-// Expand populates ci.Region from the network if only ci.RegionID was set.
+// Expand populates ci.Region from a DERP map if only ci.RegionID was set.
 // If ci.Region is already populated, Expand is a no-op. When RegionID is -1,
 // the best region is selected automatically via netcheck latency probes.
-// The forServer flag adds a header hint to the DERP map fetch request.
-func (ci *ConnInfo) Expand(ctx context.Context, forServer bool) error {
+//
+// The opts may contain any of the following types:
+//   - [DERPMapURL]: fetch the DERP map from an alternate URL instead
+//     of [DefaultDERPMapURL].
+//   - [*tailcfg.DERPMap]: expand from the provided DERP map instead
+//     of fetching one over the network.
+//   - [ExpandForServer]: mark the DERP map fetch as being on behalf
+//     of a tailcat server rather than a client.
+func (ci *ConnInfo) Expand(ctx context.Context, opts ...any) error {
+	fetchURL := DefaultDERPMapURL
+	mode := "client"
+	var dm *tailcfg.DERPMap
+	for _, opt := range opts {
+		switch v := opt.(type) {
+		case DERPMapURL:
+			fetchURL = string(v)
+		case *tailcfg.DERPMap:
+			dm = v
+		case expandForServer:
+			mode = "server"
+		default:
+			return fmt.Errorf("unknown Expand option type %T", opt)
+		}
+	}
 	for _, r := range ci.Region {
 		if r.RegionID == 0 {
 			r.RegionID = 1
@@ -604,26 +644,26 @@ func (ci *ConnInfo) Expand(ctx context.Context, forServer bool) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://login.tailscale.com/derpmap/default", nil)
-	if err != nil {
-		return fmt.Errorf("fetching DERPMap for region %v: %w", ci.RegionID, err)
-	}
-	if forServer {
-		req.Header.Set("Tailcat-Mode", "server")
-	} else {
-		req.Header.Set("Tailcat-Mode", "client")
-	}
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("fetching DERPMap for region %v: %w", ci.RegionID, err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		return fmt.Errorf("fetching DERPMap for region %v: %v", ci.RegionID, res.Status)
-	}
-	var dm tailcfg.DERPMap
-	if err := json.NewDecoder(res.Body).Decode(&dm); err != nil {
-		return fmt.Errorf("fetching DERPMap for region %v, invalid JSON from %v: %w", ci.RegionID, req.URL, err)
+	dmSrc := "provided DERP map"
+	if dm == nil {
+		dmSrc = fetchURL
+		req, err := http.NewRequestWithContext(ctx, "GET", fetchURL, nil)
+		if err != nil {
+			return fmt.Errorf("fetching DERPMap for region %v: %w", ci.RegionID, err)
+		}
+		req.Header.Set("Tailcat-Mode", mode)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("fetching DERPMap for region %v: %w", ci.RegionID, err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != 200 {
+			return fmt.Errorf("fetching DERPMap for region %v: %v", ci.RegionID, res.Status)
+		}
+		dm = new(tailcfg.DERPMap)
+		if err := json.NewDecoder(res.Body).Decode(dm); err != nil {
+			return fmt.Errorf("fetching DERPMap for region %v, invalid JSON from %v: %w", ci.RegionID, fetchURL, err)
+		}
 	}
 	if ci.RegionID == -1 {
 		// Shuffle each DERP region's nodes.
@@ -631,7 +671,7 @@ func (ci *ConnInfo) Expand(ctx context.Context, forServer bool) error {
 			rand.Shuffle(len(r.Nodes), reflect.Swapper(r.Nodes))
 		}
 
-		regionID, err := PickBestRegion(ctx, &dm)
+		regionID, err := PickBestRegion(ctx, dm)
 		if err != nil {
 			return err
 		}
@@ -664,7 +704,7 @@ func (ci *ConnInfo) Expand(ctx context.Context, forServer bool) error {
 	}
 	r, ok := dm.Regions[ci.RegionID]
 	if !ok {
-		return fmt.Errorf("connection string said only DERP RegionID %v but no such region in %v", ci.RegionID, req.URL)
+		return fmt.Errorf("connection string said only DERP RegionID %v but no such region in %v", ci.RegionID, dmSrc)
 	}
 	ci.Region = append(ci.Region, r)
 	return nil
@@ -974,6 +1014,12 @@ func createEngine(logf logger.Logf, lb *locoBackend) (err error) {
 // first use. [Client.Ping] does the same and is useful to test connectivity
 // first or to measure the relay round-trip time.
 type Client struct {
+	// DERPMapURL, if non-empty, is an alternate URL to fetch the DERP
+	// map from when the ConnBlob doesn't embed the relay details.
+	// If empty, [DefaultDERPMapURL] is used. It must be set before the
+	// client's first use.
+	DERPMapURL string
+
 	lb       *locoBackend
 	ci       ConnInfo      // of server
 	meowWait chan struct{} // closed on first meowed message from server
@@ -1104,7 +1150,11 @@ func (c *Client) ensureStarted(ctx context.Context) error {
 	if c.started {
 		return nil
 	}
-	if err := c.ci.Expand(ctx, false); err != nil {
+	var opts []any
+	if c.DERPMapURL != "" {
+		opts = append(opts, DERPMapURL(c.DERPMapURL))
+	}
+	if err := c.ci.Expand(ctx, opts...); err != nil {
 		return err
 	}
 	if len(c.ci.Region) == 0 {

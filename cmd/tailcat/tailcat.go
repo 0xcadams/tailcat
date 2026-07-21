@@ -47,6 +47,8 @@ var (
 	flagAllow   = flag.String("allow", "", "comma-separated list of public keys to allow access to the server, or 'none' to allow no clients. If empty, all clients are allowed.")
 	flagVerbose = flag.Bool("verbose", false, "be verbose")
 	flagJSON    = flag.Bool("json", false, "in server mode, write {\"listenAddr\": ...} JSON to stdout")
+
+	flagDERPMapURL = flag.String("derpmap-url", tailcat.DefaultDERPMapURL, "URL of the JSON DERP map used to resolve or auto-select a DERP region")
 )
 
 func usage(err string) {
@@ -218,6 +220,16 @@ func clientKey() key.NodePrivate {
 	return conf.Private
 }
 
+// newClient wraps [tailcat.NewClient], applying the global
+// --derpmap-url flag to the returned client.
+func newClient(logf logger.Logf, blob tailcat.ConnBlob, priv key.NodePrivate) (*tailcat.Client, error) {
+	cl, err := tailcat.NewClient(logf, blob, priv)
+	if cl != nil {
+		cl.DERPMapURL = *flagDERPMapURL
+	}
+	return cl, err
+}
+
 func clientPingMode(logf logger.Logf) {
 	args := flag.Args()
 	args = args[1:] // trim "ping"
@@ -225,7 +237,7 @@ func clientPingMode(logf logger.Logf) {
 		usage("tailcat ping <addrblob>")
 	}
 	priv := clientKey()
-	cl, err := tailcat.NewClient(logf, tailcat.ConnBlob(args[0]), priv)
+	cl, err := newClient(logf, tailcat.ConnBlob(args[0]), priv)
 	if err != nil {
 		log.Fatalf("NewClient: %v", err)
 	}
@@ -239,7 +251,7 @@ func clientPingMode(logf logger.Logf) {
 
 func clientMode(logf logger.Logf, connStr, optDest string) {
 	priv := clientKey()
-	cl, err := tailcat.NewClient(logf, tailcat.ConnBlob(connStr), priv)
+	cl, err := newClient(logf, tailcat.ConnBlob(connStr), priv)
 	if err != nil {
 		log.Fatalf("tailcat.NewClient: %v", err)
 	}
@@ -306,7 +318,7 @@ func clientSOCKSMode(logf logger.Logf) {
 	}
 	progArgs := args[2:]
 
-	cl, err := tailcat.NewClient(logf, tailcat.ConnBlob(args[1]), key.NewNode())
+	cl, err := newClient(logf, tailcat.ConnBlob(args[1]), key.NewNode())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -458,7 +470,7 @@ func server(logf logger.Logf) {
 		ci = &conf.Public
 	}
 	if reg == nil {
-		if err := ci.Expand(context.Background(), true); err != nil {
+		if err := ci.Expand(context.Background(), tailcat.ExpandForServer, tailcat.DERPMapURL(*flagDERPMapURL)); err != nil {
 			log.Fatalf("Expand: %v", err)
 		}
 
@@ -807,7 +819,7 @@ func genKey() {
 	defer cancel()
 
 	if match != "" || *region == "" || *embedDERPMap {
-		req, err := http.NewRequestWithContext(ctx, "GET", "https://login.tailscale.com/derpmap/default", nil)
+		req, err := http.NewRequestWithContext(ctx, "GET", *flagDERPMapURL, nil)
 		if err != nil {
 			log.Fatal(err)
 		}
