@@ -45,10 +45,12 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+	"unsafe"
 
 	"github.com/fxamacker/cbor/v2"
 	go4mem "go4.org/mem"
 	"go4.org/netipx"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
@@ -435,6 +437,53 @@ func (s *Server) Start() error {
 
 // Close shuts down the server, closing the WireGuard engine and DERP connections.
 func (s *Server) Close() error { return s.lb.Close() }
+
+// DrainTCP waits until every TCP connection in the server's netstack
+// has fully closed, meaning the peer has acknowledged all sent data
+// and the final FIN. It returns nil once drained, or ctx's error.
+//
+// The whole TCP stack runs inside this process, so exiting right
+// after a [net.Conn] Close can lose the FIN before it is ever
+// transmitted, leaving the peer waiting for an EOF that never comes.
+// A process that closes a connection and then exits should first
+// call DrainTCP with a timeout bounding ctx, in case the peer is
+// gone and the FIN is never acknowledged.
+//
+// It is meant for the passive closer (the side that closes second),
+// which goes straight to CLOSED once its FIN is acked. A connection
+// this side closed first instead parks in TIME-WAIT and would block
+// DrainTCP until the TIME-WAIT timer fires.
+func (s *Server) DrainTCP(ctx context.Context) error {
+	// Wait blocks until the endpoint is fully closed (EventHUp).
+	// Non-TCP endpoints return immediately. A waiter goroutine may
+	// outlive an early ctx cancellation; it exits with the process
+	// or when its endpoint eventually closes.
+	for _, ep := range tcpipStackOf(s.lb.ns).RegisteredEndpoints() {
+		done := make(chan struct{})
+		go func() {
+			ep.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+// tcpipStackOf returns ns's unexported gVisor *stack.Stack.
+//
+// TODO(bradfitz): add an exported accessor to wgengine/netstack.Impl
+// upstream and delete this reflect+unsafe cheat.
+func tcpipStackOf(ns *netstack.Impl) *stack.Stack {
+	v := reflect.ValueOf(ns).Elem().FieldByName("ipstack")
+	if !v.IsValid() {
+		panic("netstack.Impl has no ipstack field; tailscale.com dep changed?")
+	}
+	return reflect.NewAt(v.Type(), unsafe.Pointer(v.UnsafeAddr())).Elem().Interface().(*stack.Stack)
+}
 
 // AddAllowedClient adds k as an allowed client.
 //

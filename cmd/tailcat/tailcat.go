@@ -547,11 +547,25 @@ func server(logf logger.Logf) {
 		}
 		if len(portSet) == 0 {
 			return func(c net.Conn) {
-				defer c.Close()
 				_, err := io.Copy(os.Stdout, c)
 				if err != nil {
 					log.Fatal(err)
 				}
+				// Close stdout now so anything downstream in a
+				// pipeline sees EOF without waiting for the drain
+				// below.
+				os.Stdout.Close()
+				c.Close()
+				// The client exits only once it reads our EOF, which
+				// confirms delivery of everything it sent (see
+				// clientMode). The whole TCP stack runs in this
+				// process, so exiting now could discard the FIN
+				// queued by the Close above and leave the client
+				// hanging. Wait until the client acks it, with a cap
+				// in case the client is gone.
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				s.DrainTCP(ctx)
 				os.Exit(0)
 			}
 		}
