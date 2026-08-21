@@ -84,7 +84,7 @@ var Verbose = false
 // DefaultDERPMapURL is the URL of the JSON-encoded [tailcfg.DERPMap]
 // that [ConnInfo.Expand] fetches when no alternate DERP map source is
 // specified via options.
-const DefaultDERPMapURL = "https://raw.githubusercontent.com/tailscale/tcmap/refs/heads/main/derpmap.json"
+const DefaultDERPMapURL = "https://tailcat.dev/derpmap.json"
 
 // DERPMapURL is an option for [ConnInfo.Expand] specifying an
 // alternate URL to fetch the DERP map from instead of
