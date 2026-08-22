@@ -1,39 +1,30 @@
 # Tailcat
 
-Tailcat is like netcat, but over WireGuard. It creates point-to-point
-encrypted tunnels between two machines using Tailscale's data plane
-(WireGuard, magicsock, DERP relays) without requiring a Tailscale
-account or any coordination server.
+Tailcat is like [netcat](https://en.wikipedia.org/wiki/Netcat), but
+over Tailscale's data plane, without Tailscale's control plane. It
+creates point-to-point encrypted tunnels between two machines using
+Tailscale's open source data plane (WireGuard®, magicsock, DERP
+relays) without requiring a Tailscale account or the use of any
+coordination (control plane) server.
 
-The `tailcat` CLI (in `cmd/tailcat`) is built on the **tailcat** Go
-library (importable as `github.com/tailscale/tailcat`).
+The `tailcat` CLI (in `cmd/tailcat`) is built on the `tailcat` Go
+library (importable as [`github.com/tailscale/tailcat`](https://pkg.go.dev/github.com/tailscale/tailcat)).
 
-One side runs `tailcat` to start a server and gets back a short
+One side runs `tailcat` to start a server (listener) and gets back a short
 connection token. The other side passes that token to `tailcat` to
 connect. All traffic between the two is encrypted end-to-end with
 WireGuard. The initial connection bootstraps through Tailscale's DERP
 relay network, and then magicsock performs NAT traversal to upgrade to
-a direct peer-to-peer UDP connection when possible.
+a direct peer-to-peer UDP connection when possible (usually!).
 
-No accounts, no login, no configuration files, no `sudo`.
+You don't need a Tailscale account, root/admin access on the machine
+(it doesn't alter your machine's routing tables, DNS, etc.). It's just
+a userspace library and CLI tool.
 
-## Installation
+And it's all open source.
 
-Ensure git uses SSH for GitHub (needed once):
-
-```sh
-git config --global url."git@github.com:".insteadOf "https://github.com/"
-```
-
-Then install:
-
-```sh
-GOPRIVATE=github.com/tailscale/tailcat go install github.com/tailscale/tailcat/cmd/tailcat@latest
-```
-
-`GOPRIVATE` bypasses the public module proxy and checksum database
-(which can't access private repos), and the git URL rewrite makes Go
-fetch via SSH where your GitHub key provides authentication.
+You can use rate-limited free relays (the default DERP map is
+https://tailcat.dev/derpmap.json) or you can run your own.
 
 ## Usage
 
@@ -187,10 +178,3 @@ public key, within Tailscale's ULA range (`fd7a:115c:a1e0::/48`). The
 remaining 80 bits come from the first 10 bytes of the raw public key.
 IPv4 destinations (when acting as an exit node) are mapped through the
 NAT64 prefix `64:ff9b::/96`.
-
-### Key reuse trick
-
-The server reuses its WireGuard node key as its disco key (by
-interpreting the same 32 bytes as both key types). This means the
-client can derive the server's disco public key directly from the
-token without any extra round trips or key exchange.
