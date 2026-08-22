@@ -1,8 +1,11 @@
 # Tailcat
 
-Tailcat is like [netcat](https://en.wikipedia.org/wiki/Netcat), but
-over Tailscale's data plane, without Tailscale's control plane. It
-creates point-to-point encrypted tunnels between two machines using
+> _"Tailscale without Tailscale, by Tailscale"_ -- [blog post](https://tailscale.com/blog/tailcat)
+
+Tailcat is a remix of Tailscale open source pieces to act like
+[netcat](https://en.wikipedia.org/wiki/Netcat), but over Tailscale's
+data plane, without Tailscale's control plane. It creates
+point-to-point encrypted tunnels between two machines using
 Tailscale's open source data plane (WireGuard®, magicsock, DERP
 relays) without requiring a Tailscale account or the use of any
 coordination (control plane) server.
@@ -23,8 +26,8 @@ a userspace library and CLI tool.
 
 And it's all open source.
 
-You can use rate-limited free relays (the default DERP map is
-https://tailcat.dev/derpmap.json) or you can run your own.
+You can use our free rate-limited DERP relays (the default DERP map is
+https://tailcat.dev/derpmap.json) or you can [run your own](https://github.com/tailscale/tailscale/tree/main/cmd/derper#derp).
 
 ## Usage
 
