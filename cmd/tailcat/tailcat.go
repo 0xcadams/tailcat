@@ -102,7 +102,7 @@ as 'all_proxy' environment variable to a child process:
 	tailcat socks <addrblob> <cmd> [args...]
 	tailcat socks <addrblob> curl http://server.tailcat:8081/
 
-Parse an address blob and print its contents as JSON:
+Parse an address blob and print its encoded fields as JSON:
 
 	tailcat parse <addrblob>
 
@@ -432,14 +432,13 @@ func clientParseMode(logf logger.Logf) {
 	if len(args) != 2 {
 		usage("tailcat parse <addrblob>")
 	}
-	dst := args[1]
-	ci, err := tailcat.ParseConnBlob(tailcat.ConnBlob(dst))
+	v, err := tailcat.ParseConnBlobRaw(tailcat.ConnBlob(args[1]))
 	if err != nil {
 		log.Fatal(err)
 	}
 	e := json.NewEncoder(os.Stdout)
 	e.SetIndent("", "    ")
-	e.Encode(ci)
+	e.Encode(v)
 }
 
 func clientResolveMode() {
@@ -980,7 +979,6 @@ func clearUnnecessaryRegionFields(r *tailcfg.DERPRegion) {
 	}
 	for _, n := range r.Nodes {
 		n.CanPort80 = false
-		n.Name = ""
 		n.RegionID = 0
 	}
 }

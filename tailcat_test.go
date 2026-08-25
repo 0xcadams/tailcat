@@ -272,55 +272,15 @@ func TestConnBlob(t *testing.T) {
 						Nodes: []*tailcfg.DERPNode{
 							{
 								RegionID: 1,
-								Name:     "1a",
+								Name:     "my-derp.custom.example",
 								IPv4:     "400.400.400.400",
 								HostName: "my-derp.custom.example",
 							},
 							{
 								RegionID: 1,
-								Name:     "1b",
+								Name:     "my-derp2.custom.example",
 								IPv4:     "400.400.400.400",
 								HostName: "my-derp2.custom.example",
-							},
-						},
-					},
-				},
-			},
-		},
-
-		{
-			name: "ts_region",
-			ci: ConnInfo{
-				ServerPublic: akey([32]byte{1: 1, 2: 2, 31: 31}),
-				Region: []*tailcfg.DERPRegion{
-					{
-						Nodes: []*tailcfg.DERPNode{
-							{
-								Name: "1a",
-							},
-							{
-								Name: "1b",
-							},
-						},
-					},
-				},
-			},
-			back: &ConnInfo{
-				ServerPublic: akey([32]byte{1: 1, 2: 2, 31: 31}),
-				Region: []*tailcfg.DERPRegion{
-					{
-						RegionID:   1,
-						RegionCode: "1",
-						Nodes: []*tailcfg.DERPNode{
-							{
-								RegionID: 1,
-								Name:     "1a",
-								HostName: "derp1a.tailscale.com",
-							},
-							{
-								RegionID: 1,
-								Name:     "1b",
-								HostName: "derp1b.tailscale.com",
 							},
 						},
 					},
@@ -334,17 +294,18 @@ func TestConnBlob(t *testing.T) {
 				ServerPublic: akey([32]byte{1: 1, 2: 2, 31: 31}),
 				Region: []*tailcfg.DERPRegion{
 					{
-						RegionID: 123,
+						RegionID:   123,
+						RegionName: "Seattle",
 						Nodes: []*tailcfg.DERPNode{
 							{
 								RegionID: 123,
 								Name:     "1a",
-								HostName: "derp1a.tailscale.com",
+								HostName: "tc1a.ipn.dev",
 							},
 							{
 								RegionID: 123,
 								Name:     "1b",
-								HostName: "derp1b-non-default-value.tailscale.com",
+								HostName: "derp1b.tailscale.com",
 							},
 						},
 					},
@@ -359,13 +320,13 @@ func TestConnBlob(t *testing.T) {
 						Nodes: []*tailcfg.DERPNode{
 							{
 								RegionID: 1,
-								Name:     "1a",
-								HostName: "derp1a.tailscale.com",
+								Name:     "tc1a.ipn.dev",
+								HostName: "tc1a.ipn.dev",
 							},
 							{
 								RegionID: 1,
-								Name:     "1b",
-								HostName: "derp1b-non-default-value.tailscale.com",
+								Name:     "derp1b.tailscale.com",
+								HostName: "derp1b.tailscale.com",
 							},
 						},
 					},

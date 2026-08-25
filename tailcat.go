@@ -45,7 +45,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode"
 	"unsafe"
 
 	"github.com/fxamacker/cbor/v2"
@@ -541,8 +540,9 @@ func (lb *locoBackend) ConnBlobForTest() ConnBlob {
 // ConnBlob serializes the ConnInfo into a compact [ConnBlob] string.
 // It is encoded via the wire types (see wire.go), which drop the
 // DERP region fields tailcat doesn't use. Some other fields
-// (RegionID, RegionCode, implicit HostNames) are zeroed before
-// encoding to reduce size; [ParseConnBlob] restores them.
+// (RegionID, RegionCode, RegionName, node names that are redundant
+// next to an explicit HostName) are zeroed before encoding to reduce
+// size; [ParseConnBlob] restores them.
 func (ci *ConnInfo) ConnBlob() ConnBlob {
 	w := &wireConnInfo{
 		ServerPublic: ci.ServerPublic,
@@ -555,11 +555,11 @@ func (ci *ConnInfo) ConnBlob() ConnBlob {
 		// transforms are undone on the way back.
 		wr.RegionID = 0
 		wr.RegionCode = ""
+		wr.RegionName = ""
 		for _, n := range wr.Nodes {
 			n.RegionID = 0
-			implicitHost := "derp" + n.Name + ".tailscale.com"
-			if n.HostName == implicitHost {
-				n.HostName = ""
+			if n.HostName != "" {
+				n.Name = ""
 			}
 		}
 		w.Region = append(w.Region, wr)
@@ -594,34 +594,49 @@ func (b ConnBlob) Resolve(ctx context.Context, opts ...any) (ConnBlob, error) {
 	if err := ci.Expand(ctx, opts...); err != nil {
 		return "", err
 	}
-	// Keep the blob short: two relay nodes suffice, and their IPv6
-	// addresses can be re-derived from DNS.
+	// Keep the blob short: two relay nodes suffice.
 	for _, r := range ci.Region {
 		r.Nodes = r.Nodes[:min(2, len(r.Nodes))]
-		for _, n := range r.Nodes {
-			n.IPv6 = ""
-		}
 	}
 	ci.RegionID = 0
 	return ci.ConnBlob(), nil
 }
 
-// ParseConnBlob decodes a [ConnBlob] back into a [ConnInfo], restoring
-// fields that were stripped during encoding (RegionID, RegionCode, implicit
-// Tailscale DERP hostnames).
-func ParseConnBlob(cb ConnBlob) (ConnInfo, error) {
-	var zero ConnInfo
+// parseWire decodes cb into its wire form, without restoring the
+// fields that [ConnInfo.ConnBlob] elides.
+func parseWire(cb ConnBlob) (*wireConnInfo, error) {
 	rest, ok := strings.CutPrefix(string(cb), "tc")
 	if !ok {
-		return zero, errors.New("server address doesn't start with \"tc\"")
+		return nil, errors.New("server address doesn't start with \"tc\"")
 	}
 	x, err := base64.RawURLEncoding.DecodeString(rest)
 	if err != nil {
-		return zero, fmt.Errorf("base64 decode: %w", err)
+		return nil, fmt.Errorf("base64 decode: %w", err)
 	}
-	var w wireConnInfo
-	if err := cbor.Unmarshal(x, &w); err != nil {
-		return zero, fmt.Errorf("CBOR unmarshal: %v", err)
+	w := new(wireConnInfo)
+	if err := cbor.Unmarshal(x, w); err != nil {
+		return nil, fmt.Errorf("CBOR unmarshal: %v", err)
+	}
+	return w, nil
+}
+
+// ParseConnBlobRaw decodes cb into its wire form, without restoring
+// the implicit fields that [ParseConnBlob] synthesizes (region and
+// node IDs, region codes, node names). The returned value is only
+// meant for JSON display, as by the CLI's "parse" subcommand: its
+// JSON form shows just the fields the encoded blob actually carries.
+func ParseConnBlobRaw(cb ConnBlob) (any, error) {
+	return parseWire(cb)
+}
+
+// ParseConnBlob decodes a [ConnBlob] back into a [ConnInfo], restoring
+// fields that were stripped during encoding (RegionID, RegionCode,
+// node names).
+func ParseConnBlob(cb ConnBlob) (ConnInfo, error) {
+	var zero ConnInfo
+	w, err := parseWire(cb)
+	if err != nil {
+		return zero, err
 	}
 	ci := ConnInfo{
 		ServerPublic: w.ServerPublic,
@@ -638,8 +653,10 @@ func ParseConnBlob(cb ConnBlob) (ConnInfo, error) {
 			r.RegionCode = fmt.Sprint(r.RegionID)
 		}
 		for _, n := range r.Nodes {
-			if n.HostName == "" && n.Name != "" && unicode.IsNumber(rune(n.Name[0])) {
-				n.HostName = "derp" + n.Name + ".tailscale.com"
+			if n.Name == "" {
+				// Netcheck identifies nodes by Name, so give each a
+				// unique one.
+				n.Name = n.HostName
 			}
 			if n.RegionID == 0 {
 				n.RegionID = r.RegionID

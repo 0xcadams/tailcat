@@ -18,39 +18,43 @@ import (
 // name per Go field name and vice versa), which TestWireFieldNames locks
 // in.
 
+// The JSON tags are only for display (see [ParseConnBlobRaw]); they
+// mirror the Go field names but omit empty fields, so the JSON shows
+// just what the CBOR actually carries.
+
 // wireConnInfo is the wire form of [ConnInfo].
 type wireConnInfo struct {
-	ServerPublic NodePublic    `cbor:"p"`
-	Region       []*wireRegion `cbor:"r,omitempty"`
-	RegionID     int           `cbor:"i,omitempty"`
+	ServerPublic NodePublic    `cbor:"p" json:"ServerPublic"`
+	Region       []*wireRegion `cbor:"r,omitempty" json:"Region,omitempty"`
+	RegionID     int           `cbor:"i,omitempty" json:"RegionID,omitempty"`
 }
 
 // wireRegion is the wire form of [tailcfg.DERPRegion].
 type wireRegion struct {
-	RegionID   int         `cbor:"i,omitempty"`
-	RegionCode string      `cbor:"c,omitempty"`
-	RegionName string      `cbor:"m,omitempty"`
-	Nodes      []*wireNode `cbor:"N,omitempty"`
+	RegionID   int         `cbor:"i,omitempty" json:"RegionID,omitempty"`
+	RegionCode string      `cbor:"c,omitempty" json:"RegionCode,omitempty"`
+	RegionName string      `cbor:"m,omitempty" json:"RegionName,omitempty"`
+	Nodes      []*wireNode `cbor:"N,omitempty" json:"Nodes,omitempty"`
 }
 
 // wireNode is the wire form of [tailcfg.DERPNode].
 type wireNode struct {
-	Name     string `cbor:"n,omitempty"`
-	RegionID int    `cbor:"i,omitempty"`
-	HostName string `cbor:"h,omitempty"`
+	Name     string `cbor:"n,omitempty" json:"Name,omitempty"`
+	RegionID int    `cbor:"i,omitempty" json:"RegionID,omitempty"`
+	HostName string `cbor:"h,omitempty" json:"HostName,omitempty"`
 
 	// CertName is the expected TLS cert name when it differs from
 	// HostName (which is used for the SNI). Empty means the cert is
 	// expected to match HostName, as with [tailcfg.DERPNode.CertName];
 	// the production DERP map sets it on no nodes today, so this is
 	// usually absent.
-	CertName string `cbor:"t,omitempty"`
+	CertName string `cbor:"t,omitempty" json:"CertName,omitempty"`
 
-	IPv4             string `cbor:"4,omitempty"`
-	IPv6             string `cbor:"6,omitempty"`
-	STUNPort         int    `cbor:"s,omitempty"`
-	DERPPort         int    `cbor:"d,omitempty"`
-	InsecureForTests bool   `cbor:"x,omitempty"`
+	IPv4             string `cbor:"4,omitempty" json:"IPv4,omitempty"`
+	IPv6             string `cbor:"6,omitempty" json:"IPv6,omitempty"`
+	STUNPort         int    `cbor:"s,omitempty" json:"STUNPort,omitempty"`
+	DERPPort         int    `cbor:"d,omitempty" json:"DERPPort,omitempty"`
+	InsecureForTests bool   `cbor:"x,omitempty" json:"InsecureForTests,omitempty"`
 }
 
 // wireRegionOf converts a [tailcfg.DERPRegion] (such as one from the
