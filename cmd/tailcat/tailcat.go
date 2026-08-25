@@ -583,7 +583,11 @@ func server(logf logger.Logf) {
 	if err := s.Start(); err != nil {
 		log.Fatalf("Server.Start: %v", err)
 	}
-	fmt.Fprintf(os.Stderr, "# Server listening at: %v\n", connStr)
+	if *flagKey == "new" {
+		fmt.Fprintf(os.Stderr, "# 🐈 Server listening with new address: %v\n", connStr)
+	} else {
+		fmt.Fprintf(os.Stderr, "# 🐈 Server listening with saved key %q: %v\n", *flagKey, connStr)
+	}
 	if *flagJSON {
 		json.NewEncoder(os.Stdout).Encode(map[string]string{"listenAddr": string(connStr)})
 	}
