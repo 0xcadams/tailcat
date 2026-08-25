@@ -110,15 +110,15 @@ Print the public key of the client key that would be used (see --key):
 	tailcat printpub
 
 Generate and save a persistent server key and print its address blob
-(run "tailcat genkey -h" for its flags):
+(run "tailcat genkey --help" for its flags):
 
-	tailcat genkey [-key=<name>] [-force]
+	tailcat genkey [--key=<name>] [--force]
 
 Generate and save a persistent client key and print its public key,
 for use in a server's --allow list. Client modes automatically use
 the key named "client-default" when it exists:
 
-	tailcat genkey -client
+	tailcat genkey --client
 
 Environment:
 
@@ -742,7 +742,7 @@ func genKey() {
 	}
 
 	var (
-		key          = fs.String("key", "", "key path (if it contains a slash) or name (written to "+confDir+"/tailcat/keys/<name>.private.json). If empty, 'default' is used, or 'client-default' with -client.")
+		key          = fs.String("key", "", "key path (if it contains a slash) or name (written to "+confDir+"/tailcat/keys/<name>.private.json). If empty, 'default' is used, or 'client-default' with --client.")
 		client       = fs.Bool("client", false, "generate a client identity key (no DERP region) and print its public key, for use with servers' --allow lists. The 'client-default' key is used automatically by client modes.")
 		force        = fs.Bool("force", false, "force overwrite of existing key")
 		delete       = fs.Bool("delete", false, "delete named key instead of generating it; only valid if key doesn't contain slashes")
@@ -753,7 +753,7 @@ func genKey() {
 	switch len(fs.Args()) {
 	case 0:
 	default:
-		fmt.Fprintf(os.Stderr, "tailcat genkey [-client] [-key=<name>] [-force]\n")
+		fmt.Fprintf(os.Stderr, "tailcat genkey [--client] [--key=<name>] [--force]\n")
 		os.Exit(1)
 	}
 	if *key == "" {
@@ -767,7 +767,7 @@ func genKey() {
 		fs.Visit(func(f *flag.Flag) {
 			switch f.Name {
 			case "region", "embed-derp-map":
-				log.Fatalf("genkey -client does not take -%s; client keys have no DERP region", f.Name)
+				log.Fatalf("genkey --client does not take --%s; client keys have no DERP region", f.Name)
 			}
 		})
 	}
