@@ -120,6 +120,11 @@ the key named "client-default" when it exists:
 
 	tailcat genkey --client
 
+List or delete saved keys:
+
+	tailcat genkey --list
+	tailcat genkey --delete --key=<name>
+
 Environment:
 
 	TAILCAT_ADDR_FILE: in server mode, write the address blob to the
@@ -745,7 +750,8 @@ func genKey() {
 		key          = fs.String("key", "", "key path (if it contains a slash) or name (written to "+confDir+"/tailcat/keys/<name>.private.json). If empty, 'default' is used, or 'client-default' with --client.")
 		client       = fs.Bool("client", false, "generate a client identity key (no DERP region) and print its public key, for use with servers' --allow lists. The 'client-default' key is used automatically by client modes.")
 		force        = fs.Bool("force", false, "force overwrite of existing key")
-		delete       = fs.Bool("delete", false, "delete named key instead of generating it; only valid if key doesn't contain slashes")
+		delete       = fs.Bool("delete", false, "delete the key named by --key instead of generating one; --key is required and must be a name, not a path")
+		list         = fs.Bool("list", false, "list saved key names and exit")
 		region       = fs.String("region", "auto", "region ID, code, or substring to use. Or a hostname(s) comma-separated to use a custom DERP server(s). If 'auto', one is picked based on latency. If 'list', list all regions.")
 		embedDERPMap = fs.Bool("embed-derp-map", false, "embed the DERP map nodes in the connection string")
 	)
@@ -755,6 +761,30 @@ func genKey() {
 	default:
 		fmt.Fprintf(os.Stderr, "tailcat genkey [--client] [--key=<name>] [--force]\n")
 		os.Exit(1)
+	}
+	if *list {
+		ents, err := os.ReadDir(filepath.Join(confDir, "tailcat", "keys"))
+		if err != nil && !os.IsNotExist(err) {
+			log.Fatal(err)
+		}
+		for _, e := range ents {
+			if name, ok := strings.CutSuffix(e.Name(), ".private.json"); ok {
+				fmt.Println(name)
+			}
+		}
+		return
+	}
+	if *delete {
+		if *key == "" {
+			log.Fatalf("genkey --delete requires saying which key to delete with --key=<name> (see genkey --list)")
+		}
+		if keyIsPath(*key) {
+			log.Fatalf("can't delete key %q; it's a path", *key)
+		}
+		if err := os.Remove(keyPath(*key)); err != nil {
+			log.Fatal(err)
+		}
+		return
 	}
 	if *key == "" {
 		if *client {
@@ -770,16 +800,6 @@ func genKey() {
 				log.Fatalf("genkey --client does not take --%s; client keys have no DERP region", f.Name)
 			}
 		})
-	}
-
-	if *delete {
-		if keyIsPath(*key) {
-			log.Fatalf("can't delete key %q; it's a path", *key)
-		}
-		if err := os.Remove(keyPath(*key)); err != nil {
-			log.Fatal(err)
-		}
-		return
 	}
 	if !keyIsPath(*key) {
 		*key = keyPath(*key)
