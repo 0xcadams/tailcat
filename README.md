@@ -38,7 +38,7 @@ Server starts, printing out its ephemeral address:
 ```sh
 $ tailcat
 # Selected bootstrap relay region 302, San Francisco
-# Server listening at: tcomFwWCCcjS5nKNqAod034nWoJZW0LZqDhhC8U_dKdnDRYQ8uNGFpGQEu
+# 🐈 Server listening with new address: tcomFwWCCcjS5nKNqAod034nWoJZW0LZqDhhC8U_dKdnDRYQ8uNGFpGQEu
 (hangs, waiting...)
 ```
 
@@ -54,7 +54,7 @@ Then the server unblocks:
 ```sh
 $ tailcat
 # Selected bootstrap relay region 302, San Francisco
-# Server listening at: tcomFwWCCcjS5nKNqAod034nWoJZW0LZqDhhC8U_dKdnDRYQ8uNGFpGQEu
+# 🐈 Server listening with new address: tcomFwWCCcjS5nKNqAod034nWoJZW0LZqDhhC8U_dKdnDRYQ8uNGFpGQEu
 hello
 $
 ```
@@ -65,7 +65,7 @@ Or you can serve a local TCP port, forwarded to localhost:
 
 ```sh
 $ tailcat --serve=8080,8443 # or --serve=all
-# Server listening at: tcXXXXXXXXX
+# 🐈 Server listening with new address: tcXXXXXXXXX
 ```
 
 And then the client:
@@ -85,7 +85,7 @@ On Linux and macOS, you can run an SSH server too with no auth. (If you want aut
 
 ```sh
 $ tailcat --serve=no-auth-ssh
-# Server listening at: tcXXXXXXXXX
+# 🐈 Server listening with new address: tcXXXXXXXXX
 ```
 
 And on the client side:
@@ -115,19 +115,87 @@ Act as an exit node so the client can reach the server's network:
 tailcat --serve=exit-node
 ```
 
+Parse a connection token and print its contents (the server's WireGuard
+public key and DERP info) as JSON, without connecting to anything:
+
+```sh
+$ tailcat parse tcomFwWCCcjS5nKNqAod034nWoJZW0LZqDhhC8U_dKdnDRYQ8uNGFpGQEu
+{
+    "ServerPublic": "nodekey:9c8d2e6728da80a1dd37e275a82595b42d9a838610bc53f74a7670d1610f2e34",
+    "RegionID": 302
+}
+```
+
+Resolve a short token (which references a DERP region by ID, requiring
+clients to fetch the DERP map) into a longer self-contained one with the
+DERP server info embedded, letting clients connect more quickly:
+
+```sh
+$ tailcat resolve tcomFwWCCcjS5nKNqAod034nWoJZW0LZqDhhC8U_dKdnDRYQ8uNGFpGQEu
+tcomFwWCCcjS5nKNqAod034nWoJZW0LZqDhhC8U_dKdnDRYQ8uNGFygaFhToGjYWhudGMzMDJhLmlwbi5kZXZhNG0yMDguMTExLjM5LjM4YTZzMjYwNzpmNzQwOjA6M2Y6OjcyMA
+```
+
+Parsing that resolved token shows the embedded DERP info:
+
+```sh
+$ tailcat parse tcomFwWCCcjS5nKNqAod034nWoJZW0LZqDhhC8U_dKdnDRYQ8uNGFygaFhToGjYWhudGMzMDJhLmlwbi5kZXZhNG0yMDguMTExLjM5LjM4YTZzMjYwNzpmNzQwOjA6M2Y6OjcyMA
+{
+    "ServerPublic": "nodekey:9c8d2e6728da80a1dd37e275a82595b42d9a838610bc53f74a7670d1610f2e34",
+    "Region": [
+        {
+            "Nodes": [
+                {
+                    "HostName": "tc302a.ipn.dev",
+                    "IPv4": "208.111.39.38",
+                    "IPv6": "2607:f740:0:3f::720"
+                }
+            ]
+        }
+    ]
+}
+```
+
+A server can print the long self-contained form directly with the
+`--full-address` flag.
+
 ## Key Management
 
-By default, the `tailcat` CLI tool generates one-off ephemeral keys, but you can
-also generate and save a persistent key so the token stays stable across
-restarts:
+A server's address (connection token) is derived from its WireGuard key, so
+the key you use determines who can reach you:
+
+* **Ephemeral keys (the default):** each server run generates a fresh key in
+  memory and prints an address nobody has ever seen. When the process exits,
+  the key is discarded and the address is dead forever. This is the safe
+  default: sharing that address only ever refers to that one run.
+
+* **Saved keys:** `tailcat genkey` generates a key saved to disk so the
+  address stays stable across restarts. The flip side: anyone you've *ever*
+  shared that address with can connect to any future server using that key,
+  unless you restrict clients with `--allow` (see `tailcat genkey --client`).
+
+The CLI says at startup which kind it's using, so you know whether you're
+starting a fresh single-use server or re-listening on an address you may
+have shared in the past.
 
 ```sh
 $ tailcat genkey --region=nyc
 # prints the token; key saved to ~/.config/tailcat/keys/default.private.json
 
-# later:
-$ tailcat --key=default --serve=8080
+# later; the key named "default" is used automatically once it exists:
+$ tailcat --serve=8080
+# 🐈 Server listening with saved key "default": tcXXXXXXXXX
+
+# ... unless you force a one-off ephemeral key:
+$ tailcat --serve=8080 --key=new
+# 🐈 Server listening with new address: tcXXXXXXXXX
 ```
+
+That is, `default` is a magic key name: once it exists, plain `tailcat`
+silently uses it instead of generating an ephemeral key, and the startup
+line above is what tells you which happened. Use `--key=new` to get an
+ephemeral key anyway, `--key=<name>` to use a different saved key, or
+`tailcat genkey --delete --key=default` to remove the saved default key.
+`tailcat genkey --list` lists your saved keys.
 
 Tokens can also be published as DNS TXT records and looked up by name:
 
@@ -147,7 +215,7 @@ followed by base64-encoded [CBOR](https://cbor.io/) containing:
 - The server's WireGuard public key (Curve25519, 32 bytes)
 - DERP info. Either:
   1. a small integer referencing one of the default [Tailscale-run tailcat servers](https://tailcat.dev/derpmap.json)), or
-  2. full DERP server metadata, to either use a custom DERP server, or to avoid the client needing a potential round-trip to fetch the latest DERP map
+  2. full DERP server metadata, to either use a custom DERP server, or to avoid the client needing a potential round-trip to fetch the latest DERP map (the server's `--full-address` flag and the `tailcat resolve` subcommand produce this form)
 
 A typical token with just an integer region ID is around 50 bytes. With embedded
 DERP node details it's longer but self-contained.
