@@ -42,11 +42,12 @@ import (
 )
 
 var (
-	flagServe   = flag.String("serve", "", "comma-separated list of port numbers, port ranges, or service names to serve. Service names are: 'all' (serve all ports), 'exit-node' (run an exit node for all addresses), 'no-auth-ssh' (auth-free SSH server). If empty, it listens only on port 0 and writes to stdout.")
-	flagKey     = flag.String("key", "", "'new' for an ephemeral key. If empty, the default saved key is used if it exists ('default' in server mode, 'client-default' in client modes; see genkey), else an ephemeral key. Otherwise the path to a *.private.json or a name like 'foo' to read it from $CONFIG/tailcat/keys/foo.private.json")
-	flagAllow   = flag.String("allow", "", "comma-separated list of public keys to allow access to the server, or 'none' to allow no clients. If empty, all clients are allowed.")
-	flagVerbose = flag.Bool("verbose", false, "be verbose")
-	flagJSON    = flag.Bool("json", false, "in server mode, write {\"listenAddr\": ...} JSON to stdout")
+	flagServe       = flag.String("serve", "", "comma-separated list of port numbers, port ranges, or service names to serve. Service names are: 'all' (serve all ports), 'exit-node' (run an exit node for all addresses), 'no-auth-ssh' (auth-free SSH server). If empty, it listens only on port 0 and writes to stdout.")
+	flagKey         = flag.String("key", "", "'new' for an ephemeral key. If empty, the default saved key is used if it exists ('default' in server mode, 'client-default' in client modes; see genkey), else an ephemeral key. Otherwise the path to a *.private.json or a name like 'foo' to read it from $CONFIG/tailcat/keys/foo.private.json")
+	flagAllow       = flag.String("allow", "", "comma-separated list of public keys to allow access to the server, or 'none' to allow no clients. If empty, all clients are allowed.")
+	flagVerbose     = flag.Bool("verbose", false, "be verbose")
+	flagFullAddress = flag.Bool("full-address", false, "in server mode, print a longer connection address token with embedded DERP server info instead of a reference to a DERP map region ID. This lets clients connect more quickly, without a DERP map fetch.")
+	flagJSON        = flag.Bool("json", false, "in server mode, write {\"listenAddr\": ...} JSON to stdout")
 
 	flagDERPMapURL = flag.String("derpmap-url", tailcat.DefaultDERPMapURL, "URL of the JSON DERP map used to resolve or auto-select a DERP region")
 )
@@ -104,6 +105,11 @@ as 'all_proxy' environment variable to a child process:
 Parse an address blob and print its contents as JSON:
 
 	tailcat parse <addrblob>
+
+Resolve a short address blob into a longer self-contained one with
+embedded DERP server info (see also the server's --full-address flag):
+
+	tailcat resolve <addrblob>
 
 Print the public key of the client key that would be used (see --key):
 
@@ -166,6 +172,8 @@ func main() {
 		clientSSHMode(logf)
 	case "parse":
 		clientParseMode(logf)
+	case "resolve":
+		clientResolveMode()
 	case "genkey":
 		genKey()
 	case "printpub":
@@ -434,6 +442,20 @@ func clientParseMode(logf logger.Logf) {
 	e.Encode(ci)
 }
 
+func clientResolveMode() {
+	args := flag.Args()
+	if len(args) != 2 {
+		usage("tailcat resolve <addrblob>")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	rb, err := tailcat.ConnBlob(args[1]).Resolve(ctx, tailcat.DERPMapURL(*flagDERPMapURL))
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(rb)
+}
+
 func server(logf logger.Logf) {
 	portSet, services, err := parsePortSet(*flagServe)
 	if err != nil {
@@ -475,19 +497,25 @@ func server(logf logger.Logf) {
 		ci = &conf.Public
 	}
 	if reg == nil {
+		// A key created with custom DERP hostnames (genkey --region=<host>)
+		// has pre-populated regions with no DERP map ID to reference, so its
+		// address always embeds the DERP info. Decide before Expand, which
+		// zeroes RegionID when it populates Region.
+		embed := *flagFullAddress || len(ci.Region) > 0
+
 		if err := ci.Expand(context.Background(), tailcat.ExpandForServer, tailcat.DERPMapURL(*flagDERPMapURL)); err != nil {
 			log.Fatalf("Expand: %v", err)
 		}
-
 		reg = ci.Region[0]
-		if *flagKey == "new" {
-			ci = &tailcat.ConnInfo{
-				ServerPublic: tailcat.NodePublic{NodePublic: priv.Public()},
-				RegionID:     reg.RegionID,
-			}
-		}
 		clearUnnecessaryRegionFields(reg)
 		fmt.Fprintf(os.Stderr, "# Selected bootstrap relay region %v, %v\n", reg.RegionID, reg.RegionName)
+
+		ci = &tailcat.ConnInfo{ServerPublic: tailcat.NodePublic{NodePublic: priv.Public()}}
+		if embed {
+			ci.Region = []*tailcfg.DERPRegion{reg}
+		} else {
+			ci.RegionID = reg.RegionID
+		}
 	}
 	connStr := ci.ConnBlob()
 
