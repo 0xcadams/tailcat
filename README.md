@@ -3,22 +3,23 @@
 > _"Tailscale without Tailscale, by Tailscale"_ -- [blog post](https://tailscale.com/blog/tailcat)
 
 Tailcat is a remix of Tailscale open source pieces to act like
-[netcat](https://en.wikipedia.org/wiki/Netcat), but over Tailscale's
-data plane, without Tailscale's control plane. It creates
-point-to-point encrypted tunnels between two machines using
-Tailscale's open source data plane (WireGuard®, magicsock, DERP
-relays) without requiring a Tailscale account or the use of any
-coordination (control plane) server.
+[netcat](https://en.wikipedia.org/wiki/Netcat), but over Tailscale's data plane,
+without Tailscale's control plane. Tailscale's data plane (`magicsock`,
+internally) gives you point-to-point WireGuard®-encrypted tunnels between two
+machines with DERP as the NAT-hole-punching communication side channel and the
+ultimate relay-of-last-resort if NAT traversal fails. Instead of using the
+Tailscale control plane, all `tailcat` connection metadata is exchanged out of
+band, however you want.
 
-The `tailcat` CLI (in `cmd/tailcat`) is built on the `tailcat` Go
-library (importable as [`github.com/tailscale/tailcat`](https://pkg.go.dev/github.com/tailscale/tailcat)).
+The `tailcat` CLI (in `cmd/tailcat`) is built on the `tailcat` Go library
+(importable as [`github.com/tailscale/tailcat`](https://pkg.go.dev/github.com/tailscale/tailcat)).
 
-One side runs `tailcat` to start a server (listener) and gets back a short
-connection token. The other side passes that token to `tailcat` to
-connect. All traffic between the two is encrypted end-to-end with
-WireGuard. The initial connection bootstraps through Tailscale's DERP
-relay network, and then magicsock performs NAT traversal to upgrade to
-a direct peer-to-peer UDP connection when possible (usually!).
+Whether you use `tailcat` as a CLI tool or library, one side runs a `tailcat`
+server (listener) and gets back a short connection token. The other side passes
+that token to `tailcat`'s client side to connect. All traffic between the two is
+encrypted end-to-end with WireGuard. The initial connection bootstraps through
+Tailscale's DERP relay network, and then magicsock performs NAT traversal to
+upgrade to a direct peer-to-peer UDP connection when possible (usually!).
 
 You don't need a Tailscale account, root/admin access on the machine
 (it doesn't alter your machine's routing tables, DNS, etc.). It's just
@@ -31,41 +32,70 @@ https://tailcat.dev/derpmap.json) or you can [run your own](https://github.com/t
 
 ## Usage
 
-Pipe stdin/stdout between two machines:
+### Pipe stdin/stdout between two machines
 
+Server starts, printing out its ephemeral address:
 ```sh
-# Machine A (server): listen and print what the client sends
-tailcat
-
-# Machine B (client): send "hello" to the server
-echo hello | tailcat <token>
+$ tailcat
+# Selected bootstrap relay region 302, San Francisco
+# Server listening at: tcomFwWCCcjS5nKNqAod034nWoJZW0LZqDhhC8U_dKdnDRYQ8uNGFpGQEu
+(hangs, waiting...)
 ```
 
-Expose local ports through the tunnel:
+And then the client can:
 
 ```sh
-# Serve specific ports (forwarded to localhost)
-tailcat --serve=8080,8443
-
-# Serve all ports
-tailcat --serve=all
-
-# Client connects to a port, netcat style: stdin/stdout are piped to
-# port 8080 on the server. For HTTP clients like curl, see the SOCKS5
-# proxy mode below.
-tailcat <token> 8080
+$ echo hello | tailcat tcomFwWCCcjS5nKNqAod034nWoJZW0LZqDhhC8U_dKdnDRYQ8uNGFpGQEu
+$ 
 ```
 
-Run an auth-free Tailscale SSH server (Linux/macOS):
+Then the server unblocks:
 
 ```sh
-# Server
-tailcat --serve=no-auth-ssh
-
-# Client
-tailcat ssh <token>
-tailcat ssh <token> ls -la
+$ tailcat
+# Selected bootstrap relay region 302, San Francisco
+# Server listening at: tcomFwWCCcjS5nKNqAod034nWoJZW0LZqDhhC8U_dKdnDRYQ8uNGFpGQEu
+hello
+$
 ```
+
+### Expose local ports through the tunnel
+
+Or you can serve a local TCP port, forwarded to localhost:
+
+```sh
+$ tailcat --serve=8080,8443 # or --serve=all
+# Server listening at: tcXXXXXXXXX
+```
+
+And then the client:
+
+```
+$ tailcat tcXXXXXXXXX 8080
+GET / HTTP/1.1
+Host: foo
+
+HTTP/1.1 200 OK
+....
+```
+
+### Auth-free SSH server
+
+On Linux and macOS, you can run an SSH server too with no auth. (If you want auth, you can just `tailcat --serve=22` and proxy to your system SSH server)
+
+```sh
+$ tailcat --serve=no-auth-ssh
+# Server listening at: tcXXXXXXXXX
+```
+
+And on the client side:
+
+```sh
+$ tailcat ssh tcXXXXXXXXX
+$ tailcat ssh tcXXXXXXXXX ls -la
+```
+
+### Misc commands 
 
 Ping to test connectivity:
 
@@ -85,14 +115,18 @@ Act as an exit node so the client can reach the server's network:
 tailcat --serve=exit-node
 ```
 
-Generate and save a persistent key (so the token stays stable across restarts):
+## Key Management
+
+By default, the `tailcat` CLI tool generates one-off ephemeral keys, but you can
+also generate and save a persistent key so the token stays stable across
+restarts:
 
 ```sh
-tailcat genkey --region=nyc
+$ tailcat genkey --region=nyc
 # prints the token; key saved to ~/.config/tailcat/keys/default.private.json
 
 # later:
-tailcat --key=default --serve=8080
+$ tailcat --key=default --serve=8080
 ```
 
 Tokens can also be published as DNS TXT records and looked up by name:
@@ -111,23 +145,20 @@ ConnBlob internally). It looks like `tcXYZ...` and is a `"tc"` prefix
 followed by base64-encoded [CBOR](https://cbor.io/) containing:
 
 - The server's WireGuard public key (Curve25519, 32 bytes)
-- A DERP relay region identifier (a small integer referencing one of
-  Tailscale's global relay servers), or an embedded DERP node list for
-  custom relays
+- DERP info. Either:
+  1. a small integer referencing one of the default [Tailscale-run tailcat servers](https://tailcat.dev/derpmap.json)), or
+  2. full DERP server metadata, to either use a custom DERP server, or to avoid the client needing a potential round-trip to fetch the latest DERP map
 
-A typical token with just a region ID is around 50 bytes. With embedded
-DERP node details it's longer but self-contained (the client doesn't
-need to fetch the DERP map).
+A typical token with just an integer region ID is around 50 bytes. With embedded
+DERP node details it's longer but self-contained.
 
 ### Network stack
 
-Tailcat reuses Tailscale's production networking components but
-without the control plane. Internally it constructs a **locoBackend**
-("loco" for local control, or Spanish) that wires together:
+Tailcat reuses Tailscale's client networking components but
+without the control plane.
 
-- **WireGuard engine** (`wgengine`) -- a userspace WireGuard
-  implementation for encrypting all tunnel traffic. No kernel TUN/TAP
-  device, no root required.
+- **WireGuard** -- a userspace WireGuard
+  implementation for encrypting all tunnel traffic. It doesn't use a kernel TUN/TAP device (nor does it configure any networking routes or DNS settings), so `root` isn't required.
 - **magicsock** -- Tailscale's transport layer that multiplexes traffic
   over direct UDP and DERP relays. It handles STUN-based endpoint
   discovery and UDP hole-punching for NAT traversal.
@@ -149,12 +180,12 @@ without the control plane. Internally it constructs a **locoBackend**
    DERP region. It generates its own ephemeral keypair and connects to
    the same DERP relay.
 
-3. **Discovery handshake.** The client sends a **MeowPing** message
-   (a custom Tailscale disco message type) to the server through the
+3. **Discovery handshake.** The client sends a "**Meow**" ping message
+  to the server through the
    DERP relay. This message carries the client's node public key. The
    server receives it, adds the client to its WireGuard peer list and
    network map, reconfigures the WireGuard engine, and replies with a
-   **Meowed** acknowledgment.
+   "**Meowed**" acknowledgment.
 
 4. **WireGuard tunnel.** With both sides configured as WireGuard
    peers, the standard WireGuard handshake proceeds (routed through
@@ -166,7 +197,7 @@ without the control plane. Internally it constructs a **locoBackend**
    learned via STUN). Both sides attempt UDP hole-punching. If
    successful, traffic upgrades from the DERP relay to a direct
    peer-to-peer path. If hole-punching fails, DERP continues as a
-   fallback -- the connection still works, just with higher latency.
+   fallback and the connection still works, just with rate-limited throughput if you're using our public hosted DERP relays.
 
 6. **Data transfer.** The client dials a TCP port on the server
    through the tunnel. gVisor's TCP/IP stack on both sides handles
@@ -176,8 +207,7 @@ without the control plane. Internally it constructs a **locoBackend**
 
 ### Addressing
 
-Each peer derives a deterministic IPv6 address from its WireGuard
-public key, within Tailscale's ULA range (`fd7a:115c:a1e0::/48`). The
-remaining 80 bits come from the first 10 bytes of the raw public key.
-IPv4 destinations (when acting as an exit node) are mapped through the
-NAT64 prefix `64:ff9b::/96`.
+Each peer currently derives a deterministic IPv6 address from its WireGuard
+public key, but that's an implementation detail not exposed to end users and
+might change. (e.g. we might remove those bytes from the IP headers entirely and
+recover that redundant MTU)
