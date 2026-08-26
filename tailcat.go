@@ -814,6 +814,40 @@ func (b *locoBackend) peerByIP(dst netip.Addr) (_ key.NodePublic, ok bool) {
 	return key.NodePublic{}, false
 }
 
+// peerForIP is the [wgengine.Engine.SetPeerForIPFunc] callback,
+// mapping a tailcat IPv6 address to its node in the network map. The
+// engine uses it to find the peer for [wgengine.Engine.Ping].
+func (b *locoBackend) peerForIP(ip netip.Addr) (_ wgengine.PeerForIP, ok bool) {
+	var zero wgengine.PeerForIP
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.nm == nil {
+		return zero, false
+	}
+	if nodeHasAddr(b.nm.SelfNode, ip) {
+		return wgengine.PeerForIP{Node: b.nm.SelfNode, IsSelf: true}, true
+	}
+	for _, p := range b.nm.Peers {
+		if nodeHasAddr(p, ip) {
+			return wgengine.PeerForIP{Node: p}, true
+		}
+	}
+	return zero, false
+}
+
+// nodeHasAddr reports whether ip is one of n's tailcat addresses.
+func nodeHasAddr(n tailcfg.NodeView, ip netip.Addr) bool {
+	if !n.Valid() {
+		return false
+	}
+	for _, pfx := range n.Addresses().All() {
+		if pfx.Addr() == ip {
+			return true
+		}
+	}
+	return false
+}
+
 func (lb *locoBackend) Start() error {
 	if err := lb.ns.Start(nil /* no LocalBackend */); err != nil {
 		return fmt.Errorf("failed to start netstack: %w", err)
@@ -876,6 +910,7 @@ func (lb *locoBackend) Start() error {
 	lb.mu.Unlock()
 
 	mc.SetNetworkMap(nm.SelfNode, nm.Peers)
+	e.SetSelfNode(nm.SelfNode)
 	lb.sys.Netstack.Get().UpdateNetstackIPs(nm)
 	mc.SetNetworkUp(true)
 	lb.logf("NetworkMap: %v", logger.AsJSON(nm))
@@ -885,6 +920,7 @@ func (lb *locoBackend) Start() error {
 	// peer list in wgcfg.Config anymore.
 	e.SetPeerConfigFunc(lb.peerAllowedIPs)
 	e.SetPeerByIPPacketFunc(lb.peerByIP)
+	e.SetPeerForIPFunc(lb.peerForIP)
 
 	wgConf := &wgcfg.Config{
 		PrivateKey: lb.priv,
@@ -1255,6 +1291,55 @@ func (c *Client) ping(ctx context.Context) (PingResult, error) {
 		return PingResult{time.Since(t0)}, nil
 	case <-ctx.Done():
 		return zero, ctx.Err()
+	}
+}
+
+// DiscoPing sends a disco ping to the server and reports how the pong
+// came back: the result's Endpoint field is set if it arrived over a
+// direct path, else DERPRegionID (and DERPRegionCode) say which relay
+// carried it. Unlike [Client.Ping], which always measures the DERP
+// path, a disco ping also actively triggers direct path discovery, so
+// pinging repeatedly upgrades the connection when NAT traversal is
+// possible. It starts the client and registers with the server first
+// if needed.
+func (c *Client) DiscoPing(ctx context.Context) (*ipnstate.PingResult, error) {
+	if err := c.up(ctx); err != nil {
+		return nil, err
+	}
+	c.lb.mu.Lock()
+	nm := c.lb.nm
+	c.lb.mu.Unlock()
+	if nm == nil || len(nm.Peers) == 0 {
+		return nil, errors.New("client network map has no server peer")
+	}
+	peer := nm.Peers[0]
+	if peer.Addresses().Len() > 0 {
+		// Disco pings by themselves ride DERP and never trigger the
+		// call-me-maybe endpoint exchange that tunnel traffic does
+		// (tailcat has no control plane distributing endpoints), so a
+		// pure ping loop would stay on DERP forever. Send a TSMP ping
+		// through the tunnel to nudge direct path discovery along;
+		// its reply doesn't matter.
+		c.lb.sys.Engine.Get().Ping(peer.Addresses().At(0).Addr(), tailcfg.PingTSMP, 0, func(*ipnstate.PingResult) {})
+	}
+	ch := make(chan *ipnstate.PingResult, 1)
+	res := new(ipnstate.PingResult)
+	c.lb.sys.MagicSock.Get().Ping(peer, res, 0, func(r *ipnstate.PingResult) {
+		select {
+		case ch <- r:
+		default:
+		}
+	})
+	select {
+	case r := <-ch:
+		if r.Err != "" {
+			return nil, errors.New(r.Err)
+		}
+		return r, nil
+	case <-ctx.Done():
+		// Magicsock never calls the callback if all its pings time
+		// out, so the context is the only bound on waiting here.
+		return nil, ctx.Err()
 	}
 }
 

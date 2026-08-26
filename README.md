@@ -97,10 +97,14 @@ $ tailcat ssh tcXXXXXXXXX ls -la
 
 ### Misc commands 
 
-Ping to test connectivity:
+Ping to test connectivity; each pong reports whether it arrived via a
+DERP relay or a direct path. `--until-direct` keeps pinging (up to
+`--timeout`, default 10s) until a direct path works, exiting non-zero
+if one doesn't:
 
 ```sh
 $ tailcat ping <token>
+pong in 42.1ms via DERP(sfo)
 ```
 
 Run a command through a SOCKS5 proxy routed over the tunnel:

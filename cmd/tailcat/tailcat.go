@@ -95,9 +95,12 @@ Anywhere an <addrblob> argument is accepted, a DNS name whose
 
 	tailcat ssh example.com
 
-Client mode, ping:
+Client mode, ping. Each pong reports whether it arrived via a DERP
+relay or a direct path. --until-direct keeps pinging (bounded by
+--timeout, default 10s) until a direct path works:
 
 	tailcat ping <addrblob>
+	tailcat ping --until-direct <addrblob>
 
 Client mode, ssh:
 
@@ -280,22 +283,47 @@ func newClient(logf logger.Logf, blob tailcat.ConnBlob, priv key.NodePrivate) (*
 }
 
 func clientPingMode(logf logger.Logf) {
-	args := flag.Args()
-	args = args[1:] // trim "ping"
-	if len(args) == 0 {
-		usage("tailcat ping <addrblob>")
+	fs := flag.NewFlagSet("ping", flag.ExitOnError)
+	untilDirect := fs.Bool("until-direct", false, "keep pinging until a pong arrives over a direct (non-DERP) path; exit non-zero if that doesn't happen before --timeout")
+	timeout := fs.Duration("timeout", 10*time.Second, "give up after this long")
+	fs.Parse(flag.Args()[1:]) // stripping off "ping"
+	if len(fs.Args()) != 1 {
+		usage("tailcat ping [--until-direct] [--timeout=10s] <addrblob>")
 	}
 	priv := clientKey()
-	cl, err := newClient(logf, addrBlobArg(args[0]), priv)
+	cl, err := newClient(logf, addrBlobArg(fs.Args()[0]), priv)
 	if err != nil {
 		log.Fatalf("NewClient: %v", err)
 	}
 	defer cl.Close()
-	res, err := cl.Ping(context.Background())
-	if err != nil {
-		log.Fatalf("Ping: %v", err)
+
+	deadline := time.Now().Add(*timeout)
+	for {
+		t0 := time.Now()
+		ctx, cancel := context.WithDeadline(context.Background(), deadline)
+		res, err := cl.DiscoPing(ctx)
+		cancel()
+		if err != nil {
+			if *untilDirect && errors.Is(err, context.DeadlineExceeded) {
+				log.Fatalf("no direct path to the server after %v", *timeout)
+			}
+			log.Fatalf("ping: %v", err)
+		}
+		latency := time.Duration(res.LatencySeconds * float64(time.Second)).Round(10 * time.Microsecond)
+		direct := res.Endpoint != ""
+		via := res.Endpoint
+		if !direct {
+			via = fmt.Sprintf("DERP(%v)", cmp.Or(res.DERPRegionCode, strconv.Itoa(res.DERPRegionID)))
+		}
+		fmt.Printf("pong in %v via %v\n", latency, via)
+		if direct || !*untilDirect {
+			return
+		}
+		if time.Until(deadline) < time.Second/2 {
+			log.Fatalf("no direct path to the server after %v", *timeout)
+		}
+		time.Sleep(max(0, time.Second-time.Since(t0)))
 	}
-	fmt.Printf("pong in %v\n", res.Latency)
 }
 
 func clientMode(logf logger.Logf, connStr, optDest string) {
