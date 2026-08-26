@@ -197,11 +197,14 @@ ephemeral key anyway, `--key=<name>` to use a different saved key, or
 `tailcat genkey --delete --key=default` to remove the saved default key.
 `tailcat genkey --list` lists your saved keys.
 
-Tokens can also be published as DNS TXT records and looked up by name:
+Tokens can also be published as DNS TXT records and looked up by name;
+a DNS name works anywhere the CLI takes a token:
 
 ```sh
 # If example.com has a TXT record "tailcat=tc..."
 tailcat example.com 8080
+tailcat ssh example.com
+tailcat ping example.com
 ```
 
 ## How it works

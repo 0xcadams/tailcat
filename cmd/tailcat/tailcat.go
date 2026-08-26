@@ -179,34 +179,40 @@ func main() {
 	case "printpub":
 		fmt.Println(clientKey().Public().String())
 	default:
-		var addr string
-		if strings.HasPrefix(args[0], "tc") {
-			addr = args[0]
-		} else if strings.Contains(args[0], ".") {
-			// Maybe it's a DNS name with a TXT record?
-			var r net.Resolver
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			txts, err := r.LookupTXT(ctx, args[0])
-			if err != nil {
-				log.Fatalf("argument %q doesn't start with 'tc' and not a DNS name with a tailcat TXT record: %v", args[0], err)
-			}
-			for _, txt := range txts {
-				if suf, ok := strings.CutPrefix(txt, "tailcat="); ok {
-					addr = strings.TrimSpace(suf)
-					break
-				}
-			}
-		}
-		if addr == "" {
-			log.Fatalf("argument %q doesn't start with 'tc' and not a DNS name with a tailcat TXT record", args[0])
-		}
 		var dst string
 		if len(args) == 2 {
 			dst = args[1]
 		}
-		clientMode(logf, addr, dst)
+		clientMode(logf, string(addrBlobArg(args[0])), dst)
 	}
+}
+
+// addrBlobArg interprets a CLI destination argument as either a
+// "tc"-prefixed address blob or a DNS name whose "tailcat=" TXT
+// record holds one. A dot can never appear in a base64 address blob,
+// so anything containing one is treated as a DNS name; that also
+// keeps DNS names starting with "tc" working. It exits the process
+// on failure.
+func addrBlobArg(arg string) tailcat.ConnBlob {
+	if strings.Contains(arg, ".") {
+		var r net.Resolver
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		txts, err := r.LookupTXT(ctx, arg)
+		if err != nil {
+			log.Fatalf("looking up TXT record for %q: %v", arg, err)
+		}
+		for _, txt := range txts {
+			if suf, ok := strings.CutPrefix(txt, "tailcat="); ok {
+				return tailcat.ConnBlob(strings.TrimSpace(suf))
+			}
+		}
+		log.Fatalf("no \"tailcat=\" TXT record found for %q", arg)
+	}
+	if !strings.HasPrefix(arg, "tc") {
+		log.Fatalf("argument %q is neither a \"tc\"-prefixed address blob nor a DNS name", arg)
+	}
+	return tailcat.ConnBlob(arg)
 }
 
 func clientKey() key.NodePrivate {
@@ -250,7 +256,7 @@ func clientPingMode(logf logger.Logf) {
 		usage("tailcat ping <addrblob>")
 	}
 	priv := clientKey()
-	cl, err := newClient(logf, tailcat.ConnBlob(args[0]), priv)
+	cl, err := newClient(logf, addrBlobArg(args[0]), priv)
 	if err != nil {
 		log.Fatalf("NewClient: %v", err)
 	}
@@ -331,7 +337,7 @@ func clientSOCKSMode(logf logger.Logf) {
 	}
 	progArgs := args[2:]
 
-	cl, err := newClient(logf, tailcat.ConnBlob(args[1]), key.NewNode())
+	cl, err := newClient(logf, addrBlobArg(args[1]), key.NewNode())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -448,7 +454,7 @@ func clientResolveMode() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	rb, err := tailcat.ConnBlob(args[1]).Resolve(ctx, tailcat.DERPMapURL(*flagDERPMapURL))
+	rb, err := addrBlobArg(args[1]).Resolve(ctx, tailcat.DERPMapURL(*flagDERPMapURL))
 	if err != nil {
 		log.Fatal(err)
 	}
