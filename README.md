@@ -34,6 +34,19 @@ And it's all open source.
 You can use our free rate-limited DERP relays (the default DERP map is
 https://tailcat.dev/derpmap.json) or you can [run your own](https://github.com/tailscale/tailscale/tree/main/cmd/derper#derp).
 
+## Install
+
+```sh
+$ go install github.com/tailscale/tailcat/cmd/tailcat@latest
+```
+
+Or with Nix flakes, run it directly or install it:
+
+```sh
+$ nix run github:tailscale/tailcat
+$ nix profile install github:tailscale/tailcat
+```
+
 ## Usage
 
 ### Pipe stdin/stdout between two machines
