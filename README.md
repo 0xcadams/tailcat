@@ -103,8 +103,9 @@ DERP relay or a direct path. `--until-direct` keeps pinging (up to
 if one doesn't:
 
 ```sh
-$ tailcat ping <token>
+$ tailcat ping --until-direct <token>
 pong in 42.1ms via DERP(sfo)
+pong in 1.2ms via 203.0.113.7:41641
 ```
 
 Run a command through a SOCKS5 proxy routed over the tunnel:
@@ -276,9 +277,11 @@ without the control plane.
    DERP initially). Once complete, the tunnel is up and encrypted
    traffic can flow.
 
-5. **NAT traversal.** In parallel, magicsock runs Tailscale's
-   disco protocol to exchange endpoint information (public IP:port
-   learned via STUN). Both sides attempt UDP hole-punching. If
+5. **NAT traversal.** In parallel, each side advertises its UDP
+   endpoints (public IP:port learned via STUN, plus local interface
+   addresses) to the other in disco call-me-maybe messages over DERP,
+   re-advertising whenever they change. Both sides then run Tailscale's
+   disco protocol and attempt UDP hole-punching. If
    successful, traffic upgrades from the DERP relay to a direct
    peer-to-peer path. If hole-punching fails, DERP continues as a
    fallback and the connection still works, just with rate-limited throughput if you're using our public hosted DERP relays.

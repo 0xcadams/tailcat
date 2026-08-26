@@ -56,6 +56,7 @@ import (
 	go4mem "go4.org/mem"
 	"go4.org/netipx"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
+	"tailscale.com/disco"
 	"tailscale.com/envknob"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
@@ -204,6 +205,7 @@ type locoBackend struct {
 	clients        map[key.NodePublic]*tailcfg.Node // for the server
 	nm             *netmap.NetworkMap
 	allowedClients map[key.NodePublic]bool // or nil map for all
+	eps            []netip.AddrPort        // our current local UDP endpoints, sorted
 }
 
 func (b *locoBackend) derpRegionID() int {
@@ -835,6 +837,69 @@ func (b *locoBackend) peerForIP(ip netip.Addr) (_ wgengine.PeerForIP, ok bool) {
 	return zero, false
 }
 
+// onEngineStatus is the wgengine status callback. It watches for
+// changes to our magicsock UDP endpoints (learned via STUN and from
+// local interfaces) and advertises them to all current peers. Tailcat
+// has no control plane distributing endpoints, and magicsock never
+// attempts a direct path to a peer with no known endpoints, so these
+// advertisements are what make direct connections possible at all.
+func (b *locoBackend) onEngineStatus(st *wgengine.Status, err error) {
+	if err != nil || st == nil {
+		return
+	}
+	var eps []netip.AddrPort
+	for _, ep := range st.LocalAddrs {
+		eps = append(eps, ep.Addr)
+	}
+	slices.SortFunc(eps, func(a, b netip.AddrPort) int { return a.Compare(b) })
+	eps = slices.Compact(eps)
+	b.mu.Lock()
+	changed := !slices.Equal(eps, b.eps)
+	if changed {
+		b.eps = eps
+	}
+	b.mu.Unlock()
+	if changed && len(eps) > 0 {
+		go b.advertiseEndpoints()
+	}
+}
+
+// advertiseEndpoints sends our current UDP endpoints to every known
+// peer in a disco CallMeMaybe message over DERP, the same message the
+// control plane flow uses in regular Tailscale. The peer's magicsock
+// reacts by disco-pinging those endpoints, which both teaches it a
+// direct path to us and teaches us its address from the pings we
+// receive back. It's called whenever our endpoints change and when a
+// peer first completes the meow handshake, and is idempotent.
+func (b *locoBackend) advertiseEndpoints() {
+	b.mu.Lock()
+	eps := slices.Clone(b.eps)
+	var peers []tailcfg.NodeView
+	if b.nm != nil {
+		peers = b.nm.Peers
+	}
+	b.mu.Unlock()
+	if len(eps) == 0 || len(peers) == 0 {
+		return
+	}
+	payload := (&disco.CallMeMaybe{MyNumber: eps}).AppendMarshal(nil)
+	discoPriv := nodePrivateAsDiscoPrivate(b.priv)
+	mc := b.sys.MagicSock.Get()
+	regionID := b.derpRegionID()
+	for _, p := range peers {
+		// Frame and seal the message the same way magicsock's
+		// sendDiscoMessage does, so the peer's stock magicsock
+		// processes it natively.
+		pkt := make([]byte, 0, 512)
+		pkt = append(pkt, disco.Magic...)
+		pkt = b.discoPublic().AppendTo(pkt)
+		pkt = append(pkt, discoPriv.Shared(p.DiscoKey()).Seal(payload)...)
+		if _, err := mc.SendDERPPacketTo(p.Key(), regionID, pkt); err != nil {
+			b.logf("advertiseEndpoints to %v: %v", p.Key().ShortString(), err)
+		}
+	}
+}
+
 // nodeHasAddr reports whether ip is one of n's tailcat addresses.
 func nodeHasAddr(n tailcfg.NodeView, ip netip.Addr) bool {
 	if !n.Valid() {
@@ -921,6 +986,7 @@ func (lb *locoBackend) Start() error {
 	e.SetPeerConfigFunc(lb.peerAllowedIPs)
 	e.SetPeerByIPPacketFunc(lb.peerByIP)
 	e.SetPeerForIPFunc(lb.peerForIP)
+	e.SetStatusCallback(lb.onEngineStatus)
 
 	wgConf := &wgcfg.Config{
 		PrivateKey: lb.priv,
@@ -1001,6 +1067,10 @@ func (b *locoBackend) onMeow(src key.NodePublic, discoPub key.DiscoPublic) bool 
 	// No engine reconfig needed: the WireGuard device learns about the
 	// new peer lazily via the config source installed with
 	// SetPeerConfigFunc when the client's handshake arrives.
+
+	// Tell the new client our UDP endpoints so both sides can attempt
+	// a direct path. Async because advertiseEndpoints takes b.mu.
+	go b.advertiseEndpoints()
 	return true
 }
 
@@ -1055,10 +1125,14 @@ func createEngine(logf logger.Logf, lb *locoBackend) (err error) {
 	}
 	if lb.isServer {
 		conf.DERPAppName = "tailcat-server"
-		// The server forces its disco key to be derived from its node key
-		// so clients can predict it from the ConnBlob without extra round trips.
-		conf.ForceDiscoKey = nodePrivateAsDiscoPrivate(lb.priv)
 	}
+	// Both sides force their disco key to be derived from their node
+	// key. For the server, that lets clients predict its disco key
+	// from the ConnBlob without extra round trips. And knowing our own
+	// disco private key is what lets either side seal the
+	// call-me-maybe messages that advertise our UDP endpoints (see
+	// locoBackend.advertiseEndpoints).
+	conf.ForceDiscoKey = nodePrivateAsDiscoPrivate(lb.priv)
 	netns.SetEnabled(false)
 	e, err := wgengine.NewUserspaceEngine(logf, conf)
 	if err != nil {
@@ -1132,7 +1206,12 @@ func NewClient(logf logger.Logf, server ConnBlob, priv key.NodePrivate) (*Client
 	sys.Set(store)
 
 	meowWait := make(chan struct{})
-	onMeowed := sync.OnceFunc(func() { close(meowWait) })
+	onMeowed := sync.OnceFunc(func() {
+		close(meowWait)
+		// The server just learned who we are; tell it our UDP
+		// endpoints so both sides can attempt a direct path.
+		lb.advertiseEndpoints()
+	})
 	lb.onDERPRecv = func(regionID int, src key.NodePublic, pkt []byte) bool {
 		if !IsMeowPacket(pkt) {
 			return false
