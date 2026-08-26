@@ -1,6 +1,10 @@
-# Tailcat
+<p align="center">
+  <img src="tailcat.png" alt="Tailcat" width="149" height="176">
+</p>
 
-> _"Tailscale without Tailscale, by Tailscale"_ -- [blog post](https://tailscale.com/blog/tailcat)
+<p align="center"><em>"Tailscale without Tailscale, by Tailscale"</em></p>
+
+# Tailcat
 
 Tailcat is a remix of Tailscale open source pieces to act like
 [netcat](https://en.wikipedia.org/wiki/Netcat), but over Tailscale's data plane,
