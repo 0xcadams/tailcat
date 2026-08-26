@@ -46,6 +46,21 @@ func TestClassifySOCKSAddr(t *testing.T) {
 			want:   socksTarget{toServer: true, port: 80},
 		},
 		{
+			name:   "blob_host",
+			addr:   "tcomFwWCCcjS5nKNqAod034nWoJZW0LZqDhhC8U_dKdnDRYQ8uNGFpGQEu:8081",
+			lookup: noLookup,
+			want: socksTarget{
+				blob: "tcomFwWCCcjS5nKNqAod034nWoJZW0LZqDhhC8U_dKdnDRYQ8uNGFpGQEu",
+				port: 8081,
+			},
+		},
+		{
+			name:   "tc_prefixed_non_blob_host_uses_lookup",
+			addr:   "tcserver:80",
+			lookup: lookupOf("192.0.2.1"),
+			want:   socksTarget{dst: ap("192.0.2.1:80")},
+		},
+		{
 			name:   "ipv4_literal",
 			addr:   "10.1.2.3:80",
 			lookup: noLookup,

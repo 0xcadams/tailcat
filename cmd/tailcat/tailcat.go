@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -25,6 +26,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tailscale/tailcat"
@@ -97,10 +99,13 @@ Client mode, ssh to specific IP:port via addrblob's exit node:
 	tailcat ssh -p 10.0.0.1:22 <addrblob>
 
 Client mode, run an ephemeral SOCKS5 proxy and pass its address
-as 'all_proxy' environment variable to a child process:
+as 'all_proxy' environment variable to a child process. Destination
+hostnames that are themselves address blobs are dialed as tailcat
+servers, so the <addrblob> argument is optional:
 
-	tailcat socks <addrblob> <cmd> [args...]
+	tailcat socks [<addrblob>] <cmd> [args...]
 	tailcat socks <addrblob> curl http://server.tailcat:8081/
+	tailcat socks curl http://<addrblob>:8081/
 
 Parse an address blob and print its encoded fields as JSON:
 
@@ -331,21 +336,63 @@ func clientMode(logf logger.Logf, connStr, optDest string) {
 }
 
 func clientSOCKSMode(logf logger.Logf) {
-	args := flag.Args() // "socks", <derpaddr>, <cmd>, [args...]
-	if len(args) < 3 {
-		usage("tailcat socks <addrblob> <cmd> [args...]")
-	}
-	progArgs := args[2:]
+	args := flag.Args()[1:] // trim "socks"
 
-	cl, err := newClient(logf, addrBlobArg(args[1]), key.NewNode())
-	if err != nil {
-		log.Fatal(err)
+	// The address blob argument is optional: destination hostnames that
+	// are themselves address blobs are dialed directly (see
+	// classifySOCKSAddr), so a fixed server is only needed for the
+	// server.tailcat magic name and exit-node destinations.
+	var blob tailcat.ConnBlob
+	if len(args) > 0 {
+		if _, err := tailcat.ParseConnBlob(tailcat.ConnBlob(args[0])); err == nil {
+			blob = tailcat.ConnBlob(args[0])
+			args = args[1:]
+		} else if strings.Contains(args[0], ".") {
+			if _, err := exec.LookPath(args[0]); err != nil {
+				// Not a runnable command, so treat it as a DNS name
+				// holding an address blob in a TXT record.
+				blob = addrBlobArg(args[0])
+				args = args[1:]
+			}
+		}
 	}
-	pi, err := cl.Ping(context.Background())
-	if err != nil {
-		log.Fatalf("tailcat Ping: %v", err)
+	if len(args) == 0 {
+		usage("tailcat socks [<addrblob>] <cmd> [args...]")
 	}
-	logf("got ping: %+v", pi)
+	progArgs := args
+
+	var cl *tailcat.Client
+	if blob != "" {
+		var err error
+		cl, err = newClient(logf, blob, key.NewNode())
+		if err != nil {
+			log.Fatal(err)
+		}
+		pi, err := cl.Ping(context.Background())
+		if err != nil {
+			log.Fatalf("tailcat Ping: %v", err)
+		}
+		logf("got ping: %+v", pi)
+	}
+
+	var clientsMu sync.Mutex
+	clients := map[tailcat.ConnBlob]*tailcat.Client{}
+	if cl != nil {
+		clients[blob] = cl
+	}
+	clientForBlob := func(b tailcat.ConnBlob) (*tailcat.Client, error) {
+		clientsMu.Lock()
+		defer clientsMu.Unlock()
+		if c, ok := clients[b]; ok {
+			return c, nil
+		}
+		c, err := newClient(logf, b, key.NewNode())
+		if err != nil {
+			return nil, err
+		}
+		clients[b] = c
+		return c, nil
+	}
 
 	socksLn, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
@@ -357,6 +404,16 @@ func clientSOCKSMode(logf logger.Logf) {
 			dst, err := classifySOCKSAddr(ctx, lookupNetIP, addr)
 			if err != nil {
 				return nil, err
+			}
+			if dst.blob != "" {
+				bcl, err := clientForBlob(dst.blob)
+				if err != nil {
+					return nil, err
+				}
+				return bcl.DialTCPPort(ctx, dst.port)
+			}
+			if cl == nil {
+				return nil, errors.New("no address blob argument was given to \"tailcat socks\"; only address blob hostnames can be dialed")
 			}
 			if dst.toServer {
 				return cl.DialTCPPort(ctx, dst.port)
@@ -383,9 +440,10 @@ func clientSOCKSMode(logf logger.Logf) {
 
 // socksTarget is where a SOCKS5 destination address should be dialed.
 type socksTarget struct {
-	toServer bool           // dial the tailcat server itself
-	port     uint16         // the port to dial, if toServer
-	dst      netip.AddrPort // the IP:port to dial through the server as an exit node, if !toServer
+	toServer bool             // dial the tailcat server from the command line
+	blob     tailcat.ConnBlob // if non-empty, the address blob hostname to dial
+	port     uint16           // the port to dial, if toServer or blob is set
+	dst      netip.AddrPort   // the IP:port to dial through the server as an exit node, otherwise
 }
 
 // lookupNetIP resolves host using the local resolver, for
@@ -396,7 +454,9 @@ func lookupNetIP(ctx context.Context, host string) ([]netip.Addr, error) {
 
 // classifySOCKSAddr decides where the SOCKS5 destination addr should be
 // dialed. The magic hostname "server.tailcat" (or an empty host) means the
-// tailcat server itself. IP literals and hostnames resolved with lookup are
+// tailcat server itself. A hostname that is a valid address blob (which can
+// never contain a dot) means the server that blob names, letting blobs be
+// used directly in URLs. IP literals and hostnames resolved with lookup are
 // reached through the server acting as an exit node, preferring IPv4
 // addresses because they ride the NAT64 mapping and the server may not have
 // IPv6 connectivity.
@@ -412,6 +472,11 @@ func classifySOCKSAddr(ctx context.Context, lookup func(context.Context, string)
 	}
 	if host == "server.tailcat" || host == "" {
 		return socksTarget{toServer: true, port: uint16(portNum)}, nil
+	}
+	if strings.HasPrefix(host, "tc") && !strings.Contains(host, ".") {
+		if _, err := tailcat.ParseConnBlob(tailcat.ConnBlob(host)); err == nil {
+			return socksTarget{blob: tailcat.ConnBlob(host), port: uint16(portNum)}, nil
+		}
 	}
 	ip, err := netip.ParseAddr(host)
 	if err != nil {

@@ -109,6 +109,15 @@ Run a command through a SOCKS5 proxy routed over the tunnel:
 $ tailcat socks <token> curl http://server.tailcat:8081/
 ```
 
+Tokens also work directly as URL hostnames: the SOCKS proxy recognizes
+and dials them, so the token argument is optional. (Tokens are
+case-sensitive; this works with curl and most CLI tools, but not with
+browsers, which lowercase hostnames.)
+
+```sh
+$ tailcat socks curl http://<token>:8081/
+```
+
 Act as an exit node so the client can reach the server's network:
 
 ```sh
