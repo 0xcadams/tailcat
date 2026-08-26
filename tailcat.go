@@ -820,7 +820,7 @@ func fetchDERPMap(ctx context.Context, fetchURL, mode string, cache DERPMapCache
 	if dm == nil {
 		return staleOr(fmt.Errorf("invalid DERP map JSON from %v", fetchURL))
 	}
-	cache.Put(fetchURL, body, res.Header.Get("ETag"))
+	cache.Put(fetchURL, body, res.Header.Get("Etag"))
 	return dm, nil
 }
 
