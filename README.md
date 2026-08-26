@@ -285,6 +285,86 @@ instead; `--region=list` shows the choices.)
 TODO: make the client more robust here if the DERP map changes over
 time: https://github.com/tailscale/tailcat/issues/7
 
+### Go library
+
+A minimal server that answers any TCP port through the tunnel and
+prints its token (pass `log.Printf` instead of `logger.Discard` to
+see what's happening):
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net"
+
+	"github.com/tailscale/tailcat"
+	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
+)
+
+func main() {
+	ci := &tailcat.ConnInfo{RegionID: -1} // -1 means pick the nearest DERP region
+	if err := ci.Expand(context.Background(), tailcat.ExpandForServer); err != nil {
+		log.Fatal(err)
+	}
+	priv := key.NewNode()
+	s, err := tailcat.NewServer(priv, logger.Discard, ci.Region[0])
+	if err != nil {
+		log.Fatal(err)
+	}
+	s.OnTCP = func(port uint16) func(net.Conn) {
+		return func(c net.Conn) {
+			fmt.Fprintf(c, "hello from port %v\n", port)
+			c.Close()
+		}
+	}
+	if err := s.Start(); err != nil {
+		log.Fatal(err)
+	}
+	ci.ServerPublic = tailcat.NodePublic{NodePublic: priv.Public()}
+	fmt.Println(ci.ConnBlob())
+	select {}
+}
+```
+
+And a minimal client that dials it, given that token as its argument:
+
+```go
+package main
+
+import (
+	"context"
+	"io"
+	"log"
+	"os"
+
+	"github.com/tailscale/tailcat"
+	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
+)
+
+func main() {
+	cl, err := tailcat.NewClient(logger.Discard, tailcat.ConnBlob(os.Args[1]), key.NewNode())
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer cl.Close()
+	c, err := cl.DialTCPPort(context.Background(), 80)
+	if err != nil {
+		log.Fatal(err)
+	}
+	io.Copy(os.Stdout, c)
+}
+```
+
+```sh
+$ ./client tcomFwWCAWf933BLELdzd3RkHiOufJ...
+hello from port 80
+```
+
 ## How it works
 
 ### Connection tokens
