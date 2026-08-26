@@ -48,6 +48,7 @@ var (
 	flagKey         = flag.String("key", "", "'new' for an ephemeral key. If empty, the default saved key is used if it exists ('default' in server mode, 'client-default' in client modes; see genkey), else an ephemeral key. Otherwise the path to a *.private.json or a name like 'foo' to read it from $CONFIG/tailcat/keys/foo.private.json")
 	flagAllow       = flag.String("allow", "", "comma-separated list of public keys to allow access to the server, or 'none' to allow no clients. If empty, all clients are allowed.")
 	flagVerbose     = flag.Bool("verbose", false, "be verbose")
+	flagReadme      = flag.Bool("readme", false, "print the tailcat README (documentation with usage examples) and exit")
 	flagFullAddress = flag.Bool("full-address", false, "in server mode, print a longer connection address token with embedded DERP server info instead of a reference to a DERP map region ID. This lets clients connect more quickly, without a DERP map fetch.")
 	flagJSON        = flag.Bool("json", false, "in server mode, write {\"listenAddr\": ...} JSON to stdout")
 
@@ -152,6 +153,10 @@ Flags:
 func main() {
 	flag.Usage = func() { usage("") }
 	flag.Parse()
+	if *flagReadme {
+		os.Stdout.WriteString(tailcat.README)
+		return
+	}
 	if *flagVerbose {
 		tailcat.Verbose = true
 	}
