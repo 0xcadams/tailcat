@@ -291,3 +291,20 @@ Each peer currently derives a deterministic IPv6 address from its WireGuard
 public key, but that's an implementation detail not exposed to end users and
 might change. (e.g. we might remove those bytes from the IP headers entirely and
 recover that redundant MTU)
+
+## Stability
+
+Tailcat is free to use, but it comes with no API or CLI stability
+promises: the Go API, the CLI flags and output, and the wire format may
+all change. The public rate-limited Tailcat DERP relays have no uptime
+SLAs or throughput targets, and we may revoke access to them at any
+time, for any reason. Everything is provided best effort, without a
+contractual relationship (e.g. dedicated DERP relays and/or support)
+saying otherwise.
+
+## Contact Sales?
+
+If you don't want to run and support things on your own, or want any
+help, [contact sales](https://tailscale.com/contact/sales) and we can
+exchange money for [goods and
+services](https://www.youtube.com/watch?v=A81DYZh6KaQ).
