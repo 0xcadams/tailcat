@@ -448,3 +448,21 @@ If you don't want to run and support things on your own, or want any
 help, [contact sales](https://tailscale.com/contact/sales) and we can
 exchange money for [goods and
 services](https://www.youtube.com/watch?v=A81DYZh6KaQ).
+
+## History
+
+Tailcat began life in September 2023 as "derpcat", written on a long
+flight while catching up on bad movies: the first sketch was commit
+[9e4d925cc](https://github.com/tailscale/tailcat/commit/9e4d925cc)
+("cmd/dc: start of derpcat tool"), and it first worked in commit
+[911915fbb](https://github.com/tailscale/tailcat/commit/911915fbb)
+("derpcat: it's alive!", whose commit message notes "UA 605 PDX-ORD
+en route to Ireland. yay not buying the wifi."). Back then it lived
+inside a fork of the
+[tailscale.com](https://github.com/tailscale/tailscale) repo and it
+bitrot several times as the Tailscale internals moved on without it.
+We've since brought it back to life and refactored it to be a regular
+Go module client of the tailscale.com repo instead of a fork of it.
+
+It was open sourced August 2026 at the
+[TailscaleUp conference](https://tailscale.com/tailscaleup).
