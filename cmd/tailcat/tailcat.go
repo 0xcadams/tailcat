@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -273,13 +274,69 @@ func clientKey() key.NodePrivate {
 }
 
 // newClient wraps [tailcat.NewClient], applying the global
-// --derpmap-url flag to the returned client.
+// --derpmap-url flag and the disk DERP map cache to the returned
+// client.
 func newClient(logf logger.Logf, blob tailcat.ConnBlob, priv key.NodePrivate) (*tailcat.Client, error) {
 	cl, err := tailcat.NewClient(logf, blob, priv)
 	if cl != nil {
 		cl.DERPMapURL = *flagDERPMapURL
+		cl.DERPMapCache = derpMapCache{}
 	}
 	return cl, err
+}
+
+// derpMapCache implements [tailcat.DERPMapCache] on disk, in
+// $XDG_CACHE_HOME/tailcat (~/.cache/tailcat on Linux). Each DERP map
+// URL gets a derpmap-<url-escaped-URL>.json file whose mtime is the
+// stored-at time, with the server's ETag in a parallel *.etag file.
+type derpMapCache struct{}
+
+func (derpMapCache) paths(url string) (dataPath, etagPath string, err error) {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return "", "", err
+	}
+	base := filepath.Join(dir, "tailcat", "derpmap-"+neturl.QueryEscape(url))
+	return base + ".json", base + ".etag", nil
+}
+
+func (c derpMapCache) Get(url string) (data []byte, etag string, storedAt time.Time, ok bool) {
+	dataPath, etagPath, err := c.paths(url)
+	if err != nil {
+		return
+	}
+	fi, err := os.Stat(dataPath)
+	if err != nil {
+		return
+	}
+	data, err = os.ReadFile(dataPath)
+	if err != nil {
+		return
+	}
+	if v, err := os.ReadFile(etagPath); err == nil {
+		etag = strings.TrimSpace(string(v))
+	}
+	return data, etag, fi.ModTime(), true
+}
+
+func (c derpMapCache) Put(url string, data []byte, etag string) error {
+	dataPath, etagPath, err := c.paths(url)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dataPath), 0700); err != nil {
+		return err
+	}
+	// Rewriting the same contents still bumps the mtime, restarting
+	// the freshness window after a 304 revalidation.
+	if err := os.WriteFile(dataPath, data, 0644); err != nil {
+		return err
+	}
+	if etag == "" {
+		os.Remove(etagPath)
+		return nil
+	}
+	return os.WriteFile(etagPath, []byte(etag), 0644)
 }
 
 func clientPingMode(logf logger.Logf) {
@@ -572,7 +629,7 @@ func clientResolveMode() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	rb, err := addrBlobArg(args[1]).Resolve(ctx, tailcat.DERPMapURL(*flagDERPMapURL))
+	rb, err := addrBlobArg(args[1]).Resolve(ctx, tailcat.DERPMapURL(*flagDERPMapURL), derpMapCache{})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -626,7 +683,7 @@ func server(logf logger.Logf) {
 		// zeroes RegionID when it populates Region.
 		embed := *flagFullAddress || len(ci.Region) > 0
 
-		if err := ci.Expand(context.Background(), tailcat.ExpandForServer, tailcat.DERPMapURL(*flagDERPMapURL)); err != nil {
+		if err := ci.Expand(context.Background(), tailcat.ExpandForServer, tailcat.DERPMapURL(*flagDERPMapURL), derpMapCache{}); err != nil {
 			log.Fatalf("Expand: %v", err)
 		}
 		reg = ci.Region[0]
@@ -1018,23 +1075,13 @@ func genKey() {
 	defer cancel()
 
 	if match != "" || *region == "" || *embedDERPMap {
-		req, err := http.NewRequestWithContext(ctx, "GET", *flagDERPMapURL, nil)
+		// genkey picks the region a future server will listen on,
+		// hence ExpandForServer.
+		got, err := tailcat.FetchDERPMap(ctx, tailcat.DERPMapURL(*flagDERPMapURL), tailcat.ExpandForServer, derpMapCache{})
 		if err != nil {
-			log.Fatal(err)
+			log.Fatalf("derpmap fetch: %v", err)
 		}
-		// genkey picks the region a future server will listen on.
-		req.Header.Set("Tailcat-Mode", "server")
-		res, err := http.DefaultClient.Do(req)
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer res.Body.Close()
-		if res.StatusCode != 200 {
-			log.Fatalf("derpmap fetch: %v", res.Status)
-		}
-		if err := json.NewDecoder(res.Body).Decode(&dm); err != nil {
-			log.Fatal(err)
-		}
+		dm = *got
 	}
 	if *region == "" {
 		id, err := tailcat.PickBestRegion(ctx, &dm)
