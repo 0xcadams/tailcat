@@ -22,7 +22,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -34,6 +33,7 @@ import (
 	"github.com/chromedp/chromedp"
 	"github.com/tailscale/tailcat"
 	"github.com/tailscale/tailcat/internal/wasmbuild"
+	"github.com/tailscale/tailcat/webdemo"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest/integration"
 	"tailscale.com/types/key"
@@ -101,18 +101,17 @@ func findChromium() string {
 	return ""
 }
 
-// buildWasm builds the web app's wasm binary once per test process
-// and returns its path.
-var buildWasm = sync.OnceValues(func() (string, error) {
+// buildDist builds the web app's dist directory once per test
+// process and returns its path.
+var buildDist = sync.OnceValues(func() (string, error) {
 	dir, err := os.MkdirTemp("", "tailcat-wasm-test")
 	if err != nil {
 		return "", err
 	}
-	out := filepath.Join(dir, "main.wasm")
-	if err := wasmbuild.Build(".", out); err != nil {
+	if err := wasmbuild.Dist(".", dir); err != nil {
 		return "", err
 	}
-	return out, nil
+	return dir, nil
 })
 
 // renumberRegion returns a copy of dm with its single region 1
@@ -142,27 +141,21 @@ func renumberRegion(t *testing.T, dm *tailcfg.DERPMap, newID int) *tailcfg.DERPM
 	return cp
 }
 
-// newWebServer serves the web app (test cwd is the web/ directory)
-// plus the freshly built wasm, the Go toolchain's wasm_exec.js, and a
+// newWebServer serves the web app's freshly built dist directory via
+// webdemo.Handler (the same handler production servers use), plus a
 // same-origin /derpmap.json describing the local test DERP server.
 func newWebServer(t *testing.T, dm *tailcfg.DERPMap) *httptest.Server {
 	t.Helper()
-	wasmPath, err := buildWasm()
+	distDir, err := buildDist()
 	if err != nil {
-		t.Fatalf("building wasm: %v", err)
+		t.Fatalf("building dist: %v", err)
 	}
-	wasmExecJS, err := wasmbuild.WasmExecJS()
+	app, err := webdemo.Handler(os.DirFS(distDir))
 	if err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/", http.FileServer(http.Dir(".")))
-	mux.HandleFunc("/main.wasm", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, wasmPath)
-	})
-	mux.HandleFunc("/wasm_exec.js", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, wasmExecJS)
-	})
+	mux.Handle("/", app)
 	mux.HandleFunc("/derpmap.json", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(dm)
