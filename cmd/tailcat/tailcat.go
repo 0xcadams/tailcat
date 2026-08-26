@@ -78,6 +78,10 @@ password or public key):
 
 	tailcat --serve=80,no-auth-ssh
 
+Server mode, exit node (clients can reach the server's whole network):
+
+	tailcat --serve=exit-node
+
 Client mode, to default port 0 for stdin/stdout pipe:
 
 	echo hello | tailcat <addrblob>
@@ -86,14 +90,19 @@ Client mode to an explicit port:
 
 	echo "GET / HTTP/1.1..." | tailcat <addrblob> 80
 
+Anywhere an <addrblob> argument is accepted, a DNS name whose
+"tailcat=" TXT record contains one may be used instead:
+
+	tailcat ssh example.com
+
 Client mode, ping:
 
 	tailcat ping <addrblob>
 
 Client mode, ssh:
 
-	tailcat ssh <addrblob>
-	tailcat ssh <addrblob> <command> [args...]
+	tailcat ssh [user@]<addrblob>
+	tailcat ssh [user@]<addrblob> <command> [args...]
 
 Client mode, ssh to specific IP:port via addrblob's exit node:
 
@@ -137,6 +146,10 @@ List or delete saved keys:
 	tailcat genkey --list
 	tailcat genkey --delete --key=<name>
 
+Print the full documentation (the project README) with more examples:
+
+	tailcat --readme
+
 Environment:
 
 	TAILCAT_ADDR_FILE: in server mode, write the address blob to the
@@ -146,7 +159,12 @@ Environment:
 Flags:
 
 `)
+	// Print the flag defaults with double hyphens (Go's single-hyphen
+	// style weirds people out, and the flag package accepts both).
+	var b strings.Builder
+	flag.CommandLine.SetOutput(&b)
 	flag.PrintDefaults()
+	os.Stderr.WriteString(strings.ReplaceAll("\n"+b.String(), "\n  -", "\n  --")[1:])
 	os.Exit(1)
 }
 
@@ -174,6 +192,8 @@ func main() {
 		return
 	}
 	switch args[0] {
+	case "help":
+		usage("")
 	case "ping":
 		clientPingMode(logf)
 	case "socks":
