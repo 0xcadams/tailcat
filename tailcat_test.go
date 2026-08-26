@@ -47,12 +47,8 @@ func TestTailcat(t *testing.T) {
 	}
 	priv := key.NewNode()
 
-	s, err := NewServer(priv, mkLogger(t, "server"), reg)
-	if err != nil {
-		t.Fatalf("NewServer: %v", err)
-	}
+	s := &Server{Key: priv, Logf: mkLogger(t, "server"), Region: reg}
 	t.Cleanup(func() { s.Close() })
-	t.Logf("server: %v", s.ConnBlobForTest())
 
 	s.OnTCP = func(port uint16) (handler func(net.Conn)) {
 		t.Logf("test: OnTCP(port %v) ...", port)
@@ -78,8 +74,9 @@ func TestTailcat(t *testing.T) {
 	if err := s.Start(); err != nil {
 		t.Fatalf("server Start: %v", err)
 	}
+	t.Logf("server: %v", s.ConnBlob())
 
-	c, err := NewClient(mkLogger(t, "client"), s.ConnBlobForTest(), key.NewNode())
+	c, err := NewClient(mkLogger(t, "client"), s.ConnBlob(), key.NewNode())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -156,10 +153,7 @@ func TestHalfClose(t *testing.T) {
 		}
 	}()
 
-	s, err := NewServer(key.NewNode(), mkLogger(t, "server"), reg)
-	if err != nil {
-		t.Fatalf("NewServer: %v", err)
-	}
+	s := &Server{Logf: mkLogger(t, "server"), Region: reg}
 	t.Cleanup(func() { s.Close() })
 	s.OnTCP = func(port uint16) (handler func(net.Conn)) {
 		return func(c net.Conn) {
@@ -177,7 +171,7 @@ func TestHalfClose(t *testing.T) {
 		t.Fatalf("server Start: %v", err)
 	}
 
-	c, err := NewClient(mkLogger(t, "client"), s.ConnBlobForTest(), key.NewNode())
+	c, err := NewClient(mkLogger(t, "client"), s.ConnBlob(), key.NewNode())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}

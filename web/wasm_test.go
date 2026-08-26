@@ -325,10 +325,7 @@ func TestBrowserSends(t *testing.T) {
 	dm := integration.RunDERPAndSTUN(t, mkLogf(t, "derpstun"), "127.0.0.1")
 	srv := newWebServer(t, dm)
 
-	s, err := tailcat.NewServer(key.NewNode(), mkLogf(t, "server"), dm.Regions[1])
-	if err != nil {
-		t.Fatalf("NewServer: %v", err)
-	}
+	s := &tailcat.Server{Logf: mkLogf(t, "server"), Region: dm.Regions[1]}
 	t.Cleanup(func() { s.Close() })
 
 	type recvResult struct {
@@ -353,7 +350,7 @@ func TestBrowserSends(t *testing.T) {
 	if err := s.Start(); err != nil {
 		t.Fatalf("Server.Start: %v", err)
 	}
-	blob := s.ConnBlobForTest()
+	blob := s.ConnBlob()
 	t.Logf("Go server listening at %v", blob)
 
 	browserCtx := launchChrome(t, bin)

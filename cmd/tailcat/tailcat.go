@@ -699,10 +699,7 @@ func server(logf logger.Logf) {
 	}
 	connStr := ci.ConnBlob()
 
-	s, err := tailcat.NewServer(priv, logf, reg)
-	if err != nil {
-		log.Fatalf("NewServer: %v", err)
-	}
+	s := &tailcat.Server{Key: priv, Logf: logf, Region: reg}
 	if services.Contains("no-auth-ssh") && !tailcat.SupportsSSHServer() {
 		log.Fatalf("Tailscale SSH server not supported on %v", runtime.GOOS)
 	}

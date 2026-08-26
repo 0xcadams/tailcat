@@ -96,10 +96,7 @@ func tailcatListen(this js.Value, args []js.Value) any {
 			return nil, err
 		}
 
-		srv, err := tailcat.NewServer(pk.Private, logf, reg)
-		if err != nil {
-			return nil, fmt.Errorf("NewServer: %w", err)
-		}
+		srv := &tailcat.Server{Key: pk.Private, Logf: logf, Region: reg}
 		srv.OnTCP = func(port uint16) (handler func(net.Conn)) {
 			// Like the CLI's default mode, accept a connection on
 			// any port and hand it to the page.

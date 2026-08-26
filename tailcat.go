@@ -258,10 +258,43 @@ func (b *locoBackend) Close() error {
 // addressed to the server itself) and [Server.OnTCPForward] (for connections
 // the server relays to other addresses, acting as an exit node).
 //
-// Create one with [NewServer], configure the OnTCP/OnTCPForward callbacks,
-// then call [Server.Start].
+// The zero value is a usable server: optionally populate the
+// configuration fields, then call [Server.Start], which picks
+// defaults for anything unset.
 type Server struct {
-	lb *locoBackend
+	// Key is the server's node identity.
+	// If zero, Start generates a new ephemeral key.
+	Key key.NodePrivate
+
+	// Logf is the logger used for debug messages.
+	// If nil, log.Printf is used.
+	Logf logger.Logf
+
+	// Region, if non-nil, is the DERP region to use as the bootstrap
+	// relay, without fetching any DERP map.
+	Region *tailcfg.DERPRegion
+
+	// RegionID, if non-zero and Region is nil, is the ID of the DERP
+	// map region to use. If zero, the nearest region is picked based
+	// on latency at Start.
+	RegionID int
+
+	// DERPMapURL, if non-empty, is an alternate URL to fetch the DERP
+	// map from when Region is nil. If empty, [DefaultDERPMapURL] is
+	// used.
+	DERPMapURL string
+
+	// DERPMapCache, if non-nil, caches fetched DERP maps. If nil, a
+	// process-wide in-memory cache is used.
+	DERPMapCache DERPMapCache
+
+	// AllowedClients, if non-empty, restricts which client node keys
+	// may connect; all others are silently ignored. If empty, all
+	// clients are allowed. See [Server.AddAllowedClient] to add more
+	// at runtime.
+	AllowedClients []key.NodePublic
+
+	lb *locoBackend // non-nil once Start has been called
 
 	// AllowProxy, if non-nil, reports whether
 	// a TCP or UDP proxy is allowed for that target.
@@ -303,26 +336,47 @@ type Server struct {
 	ServedTCPPorts []filter.PortRange
 }
 
-// NewServer creates a new server with the given node private key, using the
-// provided DERP region as its relay. Exactly one DERPRegion must be provided.
-// After creating the server, set [Server.OnTCP] and/or [Server.OnTCPForward],
-// then call [Server.Start].
-func NewServer(priv key.NodePrivate, logf logger.Logf, regs ...*tailcfg.DERPRegion) (*Server, error) {
-	lb := newLocoBackend(priv)
-	srv := &Server{
-		lb: lb,
+// Start connects to the DERP relay and begins accepting clients,
+// first picking defaults for any unset configuration fields: a new
+// ephemeral key, log.Printf for logging, and the nearest region of
+// the default DERP map.
+func (s *Server) Start() error {
+	if s.lb != nil {
+		return errors.New("tailcat: Server.Start called twice")
+	}
+	logf := s.Logf
+	if logf == nil {
+		logf = log.Printf
+	}
+	priv := s.Key
+	if priv.IsZero() {
+		priv = key.NewNode()
+	}
+	reg := s.Region
+	if reg == nil {
+		ci := &ConnInfo{RegionID: cmp.Or(s.RegionID, -1)}
+		opts := []any{ExpandForServer}
+		if s.DERPMapURL != "" {
+			opts = append(opts, DERPMapURL(s.DERPMapURL))
+		}
+		if s.DERPMapCache != nil {
+			opts = append(opts, s.DERPMapCache)
+		}
+		if err := ci.Expand(context.Background(), opts...); err != nil {
+			return err
+		}
+		reg = ci.Region[0]
+	}
+	if reg.RegionID == 0 {
+		return fmt.Errorf("missing RegionID in %v", logger.AsJSON(reg))
 	}
 
+	lb := newLocoBackend(priv)
 	lb.logf = logf
 	lb.dm = &tailcfg.DERPMap{}
-	if len(regs) != 1 {
-		return nil, fmt.Errorf("exactly 1 DERPRegion required for now, not %v", len(regs))
-	}
-	for _, r := range regs {
-		if r.RegionID == 0 {
-			return nil, fmt.Errorf("missing RegionID in %v", logger.AsJSON(r))
-		}
-		mak.Set(&lb.dm.Regions, r.RegionID, r)
+	mak.Set(&lb.dm.Regions, reg.RegionID, reg)
+	for _, k := range s.AllowedClients {
+		mak.Set(&lb.allowedClients, k, true)
 	}
 
 	sys := &lb.sys
@@ -334,7 +388,7 @@ func NewServer(priv key.NodePrivate, logf logger.Logf, regs ...*tailcfg.DERPRegi
 		logf(format, args...)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("netmon.New: %w", err)
+		return fmt.Errorf("netmon.New: %w", err)
 	}
 	sys.Set(netMon)
 
@@ -368,22 +422,22 @@ func NewServer(priv key.NodePrivate, logf logger.Logf, regs ...*tailcfg.DERPRegi
 	}
 
 	if err := createEngine(logf, lb); err != nil {
-		return nil, fmt.Errorf("createEngine: %w", err)
+		return fmt.Errorf("createEngine: %w", err)
 	}
 	ns, err := newNetstack(logf, sys)
 	if err != nil {
-		return nil, fmt.Errorf("newNetstack: %w", err)
+		return fmt.Errorf("newNetstack: %w", err)
 	}
 	ns.ProcessLocalIPs = true
 	ns.ProcessSubnets = true
 	ns.GetTCPHandlerForFlow = func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
-		if dst.Addr() == srv.Addr() {
-			if srv.OnTCP == nil {
+		if dst.Addr() == lb.addr {
+			if s.OnTCP == nil {
 				return nil, true // send RST
 			}
-			return srv.OnTCP(dst.Port()), true
+			return s.OnTCP(dst.Port()), true
 		}
-		if srv.OnTCPForward == nil {
+		if s.OnTCPForward == nil {
 			return nil, true // send RST
 		}
 		if nat64Prefix.Contains(dst.Addr()) {
@@ -392,15 +446,11 @@ func NewServer(priv key.NodePrivate, logf logger.Logf, regs ...*tailcfg.DERPRegi
 			copy(a4[:], d6[12:16])
 			dst = netip.AddrPortFrom(netip.AddrFrom4(a4), dst.Port())
 		}
-		return srv.OnTCPForward(dst), true
+		return s.OnTCPForward(dst), true
 	}
 	lb.ns = ns
 	sys.Set(ns)
 
-	e := sys.Engine.Get()
-	// Reject all inbound traffic until Start installs the real filter,
-	// built from what the server is configured to serve.
-	e.SetFilter(filter.NewAllowNone(logf, nil))
 	dialer.UseNetstackForIP = func(ip netip.Addr) bool {
 		_, ok := lb.peerByIP(ip)
 		return ok
@@ -414,7 +464,9 @@ func NewServer(priv key.NodePrivate, logf logger.Logf, regs ...*tailcfg.DERPRegi
 
 	sys.Tun.Get().Start()
 
-	return srv, nil
+	s.lb = lb
+	sys.Engine.Get().SetFilter(s.buildFilter())
+	return lb.Start()
 }
 
 var allTCPPorts = filter.PortRange{First: 0, Last: 65535}
@@ -458,16 +510,16 @@ func (s *Server) buildFilter() *filter.Filter {
 }
 
 // Addr returns the server's IPv6 address derived from its public key.
+// It must only be called after [Server.Start].
 func (s *Server) Addr() netip.Addr { return s.lb.addr }
 
-// Start connects to the DERP relay and begins accepting clients.
-func (s *Server) Start() error {
-	s.lb.sys.Engine.Get().SetFilter(s.buildFilter())
-	return s.lb.Start()
-}
-
 // Close shuts down the server, closing the WireGuard engine and DERP connections.
-func (s *Server) Close() error { return s.lb.Close() }
+func (s *Server) Close() error {
+	if s.lb == nil {
+		return nil // never started
+	}
+	return s.lb.Close()
+}
 
 // DrainTCP waits until every TCP connection in the server's netstack
 // has fully closed, meaning the peer has acknowledged all sent data
@@ -518,18 +570,25 @@ func tcpipStackOf(ns *netstack.Impl) *stack.Stack {
 
 // AddAllowedClient adds k as an allowed client.
 //
-// Before this method is called once, all clients are allowed.
+// Until a key is allowed (here or via [Server.AllowedClients]), all
+// clients are allowed.
 func (s *Server) AddAllowedClient(k key.NodePublic) {
+	if s.lb == nil {
+		// Not yet started; applied at Start.
+		s.AllowedClients = append(s.AllowedClients, k)
+		return
+	}
 	s.lb.mu.Lock()
 	defer s.lb.mu.Unlock()
 	mak.Set(&s.lb.allowedClients, k, true)
 }
 
-// ConnBlobForTest returns a [ConnBlob] that clients can use to connect to
-// this server. It includes the full DERP region so clients don't need to
-// fetch the DERP map from the network.
-func (s *Server) ConnBlobForTest() ConnBlob {
-	return s.lb.ConnBlobForTest()
+// ConnBlob returns the token that clients use to connect to this
+// server. It embeds the full DERP region, so clients don't need to
+// fetch the DERP map from the network. It must only be called after
+// [Server.Start].
+func (s *Server) ConnBlob() ConnBlob {
+	return s.lb.connBlob()
 }
 
 func newLocoBackend(priv key.NodePrivate) *locoBackend {
@@ -551,7 +610,7 @@ func newLocoBackend(priv key.NodePrivate) *locoBackend {
 
 var debugConnBlob = envknob.Bool("TS_DEBUG_CONNBLOB")
 
-func (lb *locoBackend) ConnBlobForTest() ConnBlob {
+func (lb *locoBackend) connBlob() ConnBlob {
 	if lb.dm == nil {
 		panic("no DERPMap set")
 	}

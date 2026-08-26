@@ -38,10 +38,7 @@ func setupSSHEnv(t *testing.T) *testSSHEnv {
 	if testing.Verbose() {
 		logf = t.Logf
 	}
-	srv, err := tailcat.NewServer(key.NewNode(), logf, region)
-	if err != nil {
-		t.Fatalf("NewServer: %v", err)
-	}
+	srv := &tailcat.Server{Logf: logf, Region: region}
 	t.Cleanup(func() { srv.Close() })
 
 	srv.OnTCP = func(port uint16) func(net.Conn) {
@@ -54,7 +51,7 @@ func setupSSHEnv(t *testing.T) *testSSHEnv {
 		t.Fatalf("Start: %v", err)
 	}
 
-	client, err := tailcat.NewClient(logf, srv.ConnBlobForTest(), key.NewNode())
+	client, err := tailcat.NewClient(logf, srv.ConnBlob(), key.NewNode())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
