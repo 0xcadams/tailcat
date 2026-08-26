@@ -45,8 +45,18 @@ func TestPipeMode(t *testing.T) {
 
 	addrFile := filepath.Join(t.TempDir(), "addr")
 
+	// Point os.UserCacheDir at a temp dir so test runs don't litter
+	// the real user cache with DERP map entries keyed by this test's
+	// ephemeral --derpmap-url.
+	cacheDir := t.TempDir()
+	cacheEnv := []string{
+		"XDG_CACHE_HOME=" + cacheDir, // Linux
+		"HOME=" + cacheDir,           // macOS
+		"LocalAppData=" + cacheDir,   // Windows
+	}
+
 	server := exec.Command(bin, "--key=new", "--derpmap-url="+dmSrv.URL)
-	server.Env = append(os.Environ(), "TAILCAT_ADDR_FILE="+addrFile)
+	server.Env = append(append(os.Environ(), cacheEnv...), "TAILCAT_ADDR_FILE="+addrFile)
 	serverOut, err := server.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -74,6 +84,7 @@ func TestPipeMode(t *testing.T) {
 	t.Logf("server blob: %s", blob)
 
 	client := exec.Command(bin, "--key=new", "--derpmap-url="+dmSrv.URL, blob)
+	client.Env = append(os.Environ(), cacheEnv...)
 	const payload = "pretend this is a tarball"
 	client.Stdin = strings.NewReader(payload)
 	var clientOut, clientErr bytes.Buffer
