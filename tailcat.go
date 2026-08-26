@@ -23,6 +23,11 @@
 //
 // Using Tailscale's DERP servers is not required; you can run your own DERP
 // server and provide its region information in the ConnBlob.
+//
+// This package has no API stability promises: types, functions, and
+// the wire format may all change. See the Stability section of the
+// README for details, including the terms of Tailscale's public DERP
+// relays.
 package tailcat
 
 import (
