@@ -907,7 +907,8 @@ func genKey() {
 		force        = fs.Bool("force", false, "force overwrite of existing key")
 		delete       = fs.Bool("delete", false, "delete the key named by --key instead of generating one; --key is required and must be a name, not a path")
 		list         = fs.Bool("list", false, "list saved key names and exit")
-		region       = fs.String("region", "auto", "region ID, code, or substring to use. Or a hostname(s) comma-separated to use a custom DERP server(s). If 'auto', one is picked based on latency. If 'list', list all regions.")
+		region       = fs.String("region", "auto", "region ID, code, or substring to use. Or a hostname(s) comma-separated to use a custom DERP server(s). If 'auto', one is picked based on latency at each server startup. If 'list', list all regions.")
+		fixedRegion  = fs.Bool("fixed-region", false, "discover the nearest DERP region once, now, and bake it into the key and token, so future server startups (and clients) use it without re-probing")
 		embedDERPMap = fs.Bool("embed-derp-map", false, "embed the DERP map nodes in the connection string")
 	)
 	fs.Parse(args[1:]) // stripping off "genkey"
@@ -951,10 +952,19 @@ func genKey() {
 	if *client {
 		fs.Visit(func(f *flag.Flag) {
 			switch f.Name {
-			case "region", "embed-derp-map":
+			case "region", "fixed-region", "embed-derp-map":
 				log.Fatalf("genkey --client does not take --%s; client keys have no DERP region", f.Name)
 			}
 		})
+	}
+	if *fixedRegion {
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "region" {
+				log.Fatalf("genkey --fixed-region and --region are mutually exclusive")
+			}
+		})
+		// The empty region means "pick the best region now", below.
+		*region = ""
 	}
 	if !keyIsPath(*key) {
 		*key = keyPath(*key)

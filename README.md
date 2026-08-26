@@ -221,6 +221,66 @@ $ tailcat ssh example.com
 $ tailcat ping example.com
 ```
 
+## Examples
+
+### Protected SSH server over DNS
+
+Who needs port forwarding or port knocking? This runs an SSH server
+reachable from anywhere by name, with no open inbound ports on the
+server, where WireGuard authenticates the client before the SSH
+server ever sees a packet.
+
+On the client machine, generate a client identity keypair. It prints
+the public key, which is all the server needs to know:
+
+```sh
+client$ tailcat genkey --client
+# wrote file to ~/.config/tailcat/keys/client-default.private.json
+nodekey:cfb6bfa77a0654d7450947fd6acef17d2cd848da1d30b2540b13dac272ddfd16
+```
+
+On the server, generate a server keypair pinned to its nearest DERP
+region (see why below), then serve SSH to only that client:
+
+```sh
+server$ tailcat genkey --fixed-region
+# wrote file to ~/.config/tailcat/keys/default.private.json
+tcXXXXXXXXX
+
+server$ tailcat --serve=22 --allow=nodekey:cfb6bf...ddfd16
+# 🐈 Server listening with saved key "default": tcXXXXXXXXX
+```
+
+Publish the token in DNS as a TXT record:
+
+```
+my-server.example.com. 300 IN TXT "tailcat=tcXXXXXXXXX"
+```
+
+And then the client side is just:
+
+```sh
+client$ tailcat ssh my-server.example.com
+```
+
+Client modes automatically use the saved `client-default` key when it
+exists, so no extra flags are needed to present the allowed identity.
+Anyone else's handshake is silently ignored: they can't reach the SSH
+server, or even learn that one is running.
+
+Why `--fixed-region`: it discovers the nearest DERP region once, at
+genkey time, and bakes its ID into both the printed token and the
+saved key file, so server restarts bind to the same region (keeping
+the published token valid) without re-probing. Plain `tailcat genkey`
+defaults to `--region=auto`, which instead bakes in "pick at
+startup": fine for one-off use, but a token published in DNS should
+name a fixed region so clients and future server restarts all
+rendezvous in the same place. (`--region=<name>` pins an explicit one
+instead; `--region=list` shows the choices.)
+
+TODO: make the client more robust here if the DERP map changes over
+time: https://github.com/tailscale/tailcat/issues/7
+
 ## How it works
 
 ### Connection tokens
