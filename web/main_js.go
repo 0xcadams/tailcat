@@ -158,12 +158,11 @@ func tailcatDial(this js.Value, args []js.Value) any {
 			}
 			priv = pk.Private
 		}
-		cl, err := tailcat.NewClient(logf, tailcat.ConnBlob(addr), priv)
-		if err != nil {
-			return nil, fmt.Errorf("NewClient: %w", err)
-		}
-		if derpMapURL != "" {
-			cl.DERPMapURL = derpMapURL
+		cl := &tailcat.Client{
+			Server:     tailcat.ConnBlob(addr),
+			Key:        priv,
+			Logf:       logf,
+			DERPMapURL: derpMapURL,
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()

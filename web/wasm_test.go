@@ -36,7 +36,6 @@ import (
 	"github.com/tailscale/tailcat/webdemo"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest/integration"
-	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
 
@@ -256,18 +255,18 @@ func TestBrowserReceives(t *testing.T) {
 	}
 	t.Logf("browser listening at %v", addr)
 
-	cl, err := tailcat.NewClient(mkLogf(t, "client"), tailcat.ConnBlob(addr), key.NewNode())
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
+	cl := &tailcat.Client{
+		Server:     tailcat.ConnBlob(addr),
+		Logf:       mkLogf(t, "client"),
+		DERPMapURL: srv.URL + "/derpmap.json",
 	}
 	t.Cleanup(func() { cl.Close() })
-	cl.DERPMapURL = srv.URL + "/derpmap.json"
 
 	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 	defer cancel()
 	for {
 		pctx, pcancel := context.WithTimeout(ctx, 5*time.Second)
-		_, err = cl.Ping(pctx)
+		_, err := cl.Ping(pctx)
 		pcancel()
 		if err == nil {
 			break

@@ -17,7 +17,6 @@ import (
 	"github.com/tailscale/tailcat"
 	gossh "golang.org/x/crypto/ssh"
 	"tailscale.com/tstest/integration"
-	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
 
@@ -51,10 +50,7 @@ func setupSSHEnv(t *testing.T) *testSSHEnv {
 		t.Fatalf("Start: %v", err)
 	}
 
-	client, err := tailcat.NewClient(logf, srv.ConnBlob(), key.NewNode())
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
+	client := &tailcat.Client{Server: srv.ConnBlob(), Logf: logf}
 	t.Cleanup(func() { client.Close() })
 
 	tailcat.PingForTest(t, srv, client)

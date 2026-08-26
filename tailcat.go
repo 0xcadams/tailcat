@@ -1361,19 +1361,35 @@ func createEngine(logf logger.Logf, lb *locoBackend) (err error) {
 }
 
 // Client connects to a [Server] over a WireGuard tunnel relayed through DERP.
-// After creating a Client with [NewClient], just dial: [Client.Dial],
-// [Client.DialTCPPort], and [Client.DialTCP] lazily establish the tunnel on
-// first use. [Client.Ping] does the same and is useful to test connectivity
-// first or to measure the relay round-trip time.
+// Populate Server (the only required field, or use the [NewClient]
+// shorthand), then just dial: [Client.Dial], [Client.DialTCPPort],
+// and [Client.DialTCP] lazily establish the tunnel on first use,
+// picking defaults for any unset fields. [Client.Ping] does the same
+// and is useful to test connectivity first or to measure the relay
+// round-trip time.
 type Client struct {
+	// Server is the token identifying the server to connect to.
+	// It is required and must be set before the client's first use.
+	Server ConnBlob
+
+	// Key is the client's node identity, which servers can allowlist.
+	// If zero, a new ephemeral key is generated at first use.
+	// If set, it must be set before the client's first use.
+	Key key.NodePrivate
+
+	// Logf is the logger used for debug messages. If nil, log.Printf
+	// is used. If set, it must be set before the client's first use.
+	Logf logger.Logf
+
 	// DERPMapURL, if non-empty, is an alternate URL to fetch the DERP
-	// map from when the ConnBlob doesn't embed the relay details.
-	// If empty, [DefaultDERPMapURL] is used. It must be set before the
-	// client's first use.
+	// map from when the token doesn't embed the relay details.
+	// If empty, [DefaultDERPMapURL] is used. If set, it must be set
+	// before the client's first use.
 	DERPMapURL string
 
-	// DERPMapCache, if non-nil, caches fetched DERP maps. It must be
-	// set before the client's first use.
+	// DERPMapCache, if non-nil, caches fetched DERP maps. If nil, a
+	// process-wide in-memory cache is used. If set, it must be set
+	// before the client's first use.
 	DERPMapCache DERPMapCache
 
 	lb       *locoBackend
@@ -1382,26 +1398,53 @@ type Client struct {
 
 	serverAddr netip.Addr
 
-	startMu sync.Mutex // guards started and the one-time startup work
+	startMu sync.Mutex      // guards key, started, and the one-time startup work
+	key     key.NodePrivate // the effective node identity; Key or generated
 	started bool
 
 	upDone atomic.Bool // whether the server has meowed us at least once
 }
 
-// NewClient creates a client that will connect to the server identified by the
-// given [ConnBlob]. The priv key is the client's own node identity.
-//
-// NewClient does no network access; the tunnel is established lazily
-// by the first Dial or [Client.Ping] call, which also resolves the
-// DERP region if the ConnBlob references it by ID rather than
-// embedding it.
-func NewClient(logf logger.Logf, server ConnBlob, priv key.NodePrivate) (*Client, error) {
-	ci, err := ParseConnBlob(server)
+// nodeKeyLocked returns the client's effective node private key,
+// resolving it from the Key field (or generating a fresh one) on
+// first use. c.startMu must be held.
+func (c *Client) nodeKeyLocked() key.NodePrivate {
+	if c.key.IsZero() {
+		if !c.Key.IsZero() {
+			c.key = c.Key
+		} else {
+			c.key = key.NewNode()
+		}
+	}
+	return c.key
+}
+
+// NewClient returns a client that will connect to the server
+// identified by the given token. It is shorthand for
+// &Client{Server: server}; see [Client] for the optional fields that
+// may also be set before the client's first use.
+func NewClient(server ConnBlob) *Client {
+	return &Client{Server: server}
+}
+
+// initLocked builds the client's network stack (WireGuard engine and
+// netstack) on first use, with defaults for unset config fields. It
+// does no network access; that happens in ensureStarted, its caller.
+// c.startMu must be held.
+func (c *Client) initLocked() error {
+	if c.lb != nil {
+		return nil
+	}
+	logf := c.Logf
+	if logf == nil {
+		logf = log.Printf
+	}
+	ci, err := ParseConnBlob(c.Server)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	lb := newLocoBackend(priv)
+	lb := newLocoBackend(c.nodeKeyLocked())
 	lb.logf = logf
 	lb.dm = &tailcfg.DERPMap{}
 	lb.serverPub = ci.ServerPublic.NodePublic
@@ -1415,7 +1458,7 @@ func NewClient(logf logger.Logf, server ConnBlob, priv key.NodePrivate) (*Client
 		logf(format, args...)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("netmon.New: %w", err)
+		return fmt.Errorf("netmon.New: %w", err)
 	}
 	sys.Set(netMon)
 
@@ -1444,11 +1487,11 @@ func NewClient(logf logger.Logf, server ConnBlob, priv key.NodePrivate) (*Client
 	}
 
 	if err := createEngine(logf, lb); err != nil {
-		return nil, fmt.Errorf("createEngine: %w", err)
+		return fmt.Errorf("createEngine: %w", err)
 	}
 	ns, err := newNetstack(logf, sys)
 	if err != nil {
-		return nil, fmt.Errorf("newNetstack: %w", err)
+		return fmt.Errorf("newNetstack: %w", err)
 	}
 	ns.ProcessLocalIPs = true // required to even reply to TCP SYNs client sends out
 	ns.GetTCPHandlerForFlow = func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
@@ -1478,19 +1521,30 @@ func NewClient(logf logger.Logf, server ConnBlob, priv key.NodePrivate) (*Client
 	}
 	sys.Tun.Get().Start()
 
-	return &Client{
-		ci:         ci,
-		lb:         lb,
-		serverAddr: tcAddrForKey(ci.ServerPublic.NodePublic),
-		meowWait:   meowWait,
-	}, nil
+	c.ci = ci
+	c.lb = lb
+	c.serverAddr = tcAddrForKey(ci.ServerPublic.NodePublic)
+	c.meowWait = meowWait
+	return nil
 }
 
-// PublicKey returns the client's node public key.
-func (c *Client) PublicKey() key.NodePublic { return c.lb.pub }
+// PublicKey returns the client's node public key, generating the key
+// first if the Key field is zero and the client hasn't yet been used.
+func (c *Client) PublicKey() key.NodePublic {
+	c.startMu.Lock()
+	defer c.startMu.Unlock()
+	return c.nodeKeyLocked().Public()
+}
 
 // Close shuts down the client, closing the WireGuard engine and DERP connections.
-func (c *Client) Close() error { return c.lb.Close() }
+func (c *Client) Close() error {
+	c.startMu.Lock()
+	defer c.startMu.Unlock()
+	if c.lb == nil {
+		return nil // never used
+	}
+	return c.lb.Close()
+}
 
 // PingResult is the result of a successful [Client.Ping] call.
 type PingResult struct {
@@ -1510,6 +1564,9 @@ func (c *Client) ensureStarted(ctx context.Context) error {
 	defer c.startMu.Unlock()
 	if c.started {
 		return nil
+	}
+	if err := c.initLocked(); err != nil {
+		return err
 	}
 	var opts []any
 	if c.DERPMapURL != "" {

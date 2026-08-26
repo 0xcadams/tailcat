@@ -76,10 +76,7 @@ func TestTailcat(t *testing.T) {
 	}
 	t.Logf("server: %v", s.ConnBlob())
 
-	c, err := NewClient(mkLogger(t, "client"), s.ConnBlob(), key.NewNode())
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
+	c := &Client{Server: s.ConnBlob(), Logf: mkLogger(t, "client")}
 	t.Cleanup(func() { c.Close() })
 
 	t.Logf("Client is %v", c.PublicKey())
@@ -171,10 +168,7 @@ func TestHalfClose(t *testing.T) {
 		t.Fatalf("server Start: %v", err)
 	}
 
-	c, err := NewClient(mkLogger(t, "client"), s.ConnBlob(), key.NewNode())
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
+	c := &Client{Server: s.ConnBlob(), Logf: mkLogger(t, "client")}
 	t.Cleanup(func() { c.Close() })
 	PingForTest(t, s, c)
 

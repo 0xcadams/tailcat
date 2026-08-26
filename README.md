@@ -321,7 +321,10 @@ func main() {
 }
 ```
 
-And a minimal client that dials it, given that token as its argument:
+And a minimal client that dials it, given that token as its argument.
+Like Server, the Client zero value works with just its Server token
+field set (`tailcat.NewClient` is shorthand for exactly that), and
+the tunnel is established lazily by the first dial:
 
 ```go
 package main
@@ -333,15 +336,10 @@ import (
 	"os"
 
 	"github.com/tailscale/tailcat"
-	"tailscale.com/types/key"
-	"tailscale.com/types/logger"
 )
 
 func main() {
-	cl, err := tailcat.NewClient(logger.Discard, tailcat.ConnBlob(os.Args[1]), key.NewNode())
-	if err != nil {
-		log.Fatal(err)
-	}
+	cl := tailcat.NewClient(tailcat.ConnBlob(os.Args[1]))
 	defer cl.Close()
 	c, err := cl.DialTCPPort(context.Background(), 80)
 	if err != nil {

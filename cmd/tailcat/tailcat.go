@@ -273,16 +273,16 @@ func clientKey() key.NodePrivate {
 	return conf.Private
 }
 
-// newClient wraps [tailcat.NewClient], applying the global
-// --derpmap-url flag and the disk DERP map cache to the returned
-// client.
-func newClient(logf logger.Logf, blob tailcat.ConnBlob, priv key.NodePrivate) (*tailcat.Client, error) {
-	cl, err := tailcat.NewClient(logf, blob, priv)
-	if cl != nil {
-		cl.DERPMapURL = *flagDERPMapURL
-		cl.DERPMapCache = derpMapCache{}
+// newClient returns a [tailcat.Client] configured with the global
+// --derpmap-url flag and the disk DERP map cache.
+func newClient(logf logger.Logf, blob tailcat.ConnBlob, priv key.NodePrivate) *tailcat.Client {
+	return &tailcat.Client{
+		Server:       blob,
+		Key:          priv,
+		Logf:         logf,
+		DERPMapURL:   *flagDERPMapURL,
+		DERPMapCache: derpMapCache{},
 	}
-	return cl, err
 }
 
 // derpMapCache implements [tailcat.DERPMapCache] on disk, in
@@ -347,11 +347,7 @@ func clientPingMode(logf logger.Logf) {
 	if len(fs.Args()) != 1 {
 		usage("tailcat ping [--until-direct] [--timeout=10s] <addrblob>")
 	}
-	priv := clientKey()
-	cl, err := newClient(logf, addrBlobArg(fs.Args()[0]), priv)
-	if err != nil {
-		log.Fatalf("NewClient: %v", err)
-	}
+	cl := newClient(logf, addrBlobArg(fs.Args()[0]), clientKey())
 	defer cl.Close()
 
 	deadline := time.Now().Add(*timeout)
@@ -384,11 +380,7 @@ func clientPingMode(logf logger.Logf) {
 }
 
 func clientMode(logf logger.Logf, connStr, optDest string) {
-	priv := clientKey()
-	cl, err := newClient(logf, tailcat.ConnBlob(connStr), priv)
-	if err != nil {
-		log.Fatalf("tailcat.NewClient: %v", err)
-	}
+	cl := newClient(logf, tailcat.ConnBlob(connStr), clientKey())
 
 	var dial func(context.Context) (net.Conn, error)
 	switch {
@@ -473,11 +465,7 @@ func clientSOCKSMode(logf logger.Logf) {
 
 	var cl *tailcat.Client
 	if blob != "" {
-		var err error
-		cl, err = newClient(logf, blob, key.NewNode())
-		if err != nil {
-			log.Fatal(err)
-		}
+		cl = newClient(logf, blob, key.NewNode())
 		pi, err := cl.Ping(context.Background())
 		if err != nil {
 			log.Fatalf("tailcat Ping: %v", err)
@@ -490,18 +478,15 @@ func clientSOCKSMode(logf logger.Logf) {
 	if cl != nil {
 		clients[blob] = cl
 	}
-	clientForBlob := func(b tailcat.ConnBlob) (*tailcat.Client, error) {
+	clientForBlob := func(b tailcat.ConnBlob) *tailcat.Client {
 		clientsMu.Lock()
 		defer clientsMu.Unlock()
 		if c, ok := clients[b]; ok {
-			return c, nil
+			return c
 		}
-		c, err := newClient(logf, b, key.NewNode())
-		if err != nil {
-			return nil, err
-		}
+		c := newClient(logf, b, key.NewNode())
 		clients[b] = c
-		return c, nil
+		return c
 	}
 
 	socksLn, err := net.Listen("tcp", "localhost:0")
@@ -516,11 +501,7 @@ func clientSOCKSMode(logf logger.Logf) {
 				return nil, err
 			}
 			if dst.blob != "" {
-				bcl, err := clientForBlob(dst.blob)
-				if err != nil {
-					return nil, err
-				}
-				return bcl.DialTCPPort(ctx, dst.port)
+				return clientForBlob(dst.blob).DialTCPPort(ctx, dst.port)
 			}
 			if cl == nil {
 				return nil, errors.New("no address blob argument was given to \"tailcat socks\"; only address blob hostnames can be dialed")
