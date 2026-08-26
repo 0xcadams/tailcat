@@ -97,12 +97,14 @@ const DefaultDERPMapURL = "https://tailcat.dev/derpmap.json"
 type DERPMapURL string
 
 // DERPMapCache is an option for [ConnInfo.Expand] and [FetchDERPMap]
-// that caches fetched DERP maps. Without one, every fetch goes over
-// the network. Implementations just store bytes; the freshness policy
-// lives in the fetcher: a stored map younger than an hour is used
-// without any network traffic, an older one is revalidated with
-// If-None-Match (the ETag is opaque to us), and a stored map of any
-// age is used as a fallback if the fetch fails or times out.
+// that caches fetched DERP maps. Without one, a process-wide
+// in-memory cache is used; provide an implementation (like the
+// tailcat CLI's on-disk one) to persist across processes.
+// Implementations just store bytes; the freshness policy lives in the
+// fetcher: a stored map younger than an hour is used without any
+// network traffic, an older one is revalidated with If-None-Match
+// (the ETag is opaque to us), and a stored map of any age is used as
+// a fallback if the fetch fails or times out.
 type DERPMapCache interface {
 	// Get returns the previously stored DERP map response for url:
 	// its raw JSON, the server's ETag (or ""), and when it was
@@ -702,7 +704,8 @@ func ParseConnBlob(cb ConnBlob) (ConnInfo, error) {
 //     [DefaultDERPMapURL].
 //   - [ExpandForServer]: mark the fetch as being on behalf of a
 //     tailcat server rather than a client.
-//   - [DERPMapCache]: cache fetched DERP maps.
+//   - [DERPMapCache]: cache fetched DERP maps (defaults to a
+//     process-wide in-memory cache).
 func FetchDERPMap(ctx context.Context, opts ...any) (*tailcfg.DERPMap, error) {
 	fetchURL := DefaultDERPMapURL
 	mode := "client"
@@ -722,26 +725,57 @@ func FetchDERPMap(ctx context.Context, opts ...any) (*tailcfg.DERPMap, error) {
 	return fetchDERPMap(ctx, fetchURL, mode, cache)
 }
 
+// memDERPMapCache is a process-wide in-memory [DERPMapCache], the
+// default when no cache option is provided.
+type memDERPMapCache struct {
+	mu sync.Mutex
+	m  map[string]memDERPMapEntry
+}
+
+type memDERPMapEntry struct {
+	data     []byte
+	etag     string
+	storedAt time.Time
+}
+
+var defaultDERPMapCache = &memDERPMapCache{}
+
+func (c *memDERPMapCache) Get(url string) (data []byte, etag string, storedAt time.Time, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.m[url]
+	return e.data, e.etag, e.storedAt, ok
+}
+
+func (c *memDERPMapCache) Put(url string, data []byte, etag string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	mak.Set(&c.m, url, memDERPMapEntry{data, etag, time.Now()})
+	return nil
+}
+
 // fetchDERPMap fetches and decodes the JSON DERP map from fetchURL,
 // sending mode ("client" or "server") as the Tailcat-Mode hint
-// header. If cache is non-nil, it is used per the freshness policy
-// documented on [DERPMapCache].
+// header. If cache is nil, a process-wide in-memory cache is used;
+// either way, it's used per the freshness policy documented on
+// [DERPMapCache].
 //
 // TODO: do a fresh fetch (ignoring cache freshness) if we ever fail
 // to connect to any DERP region afterwards, e.g. if the cached map is
 // so stale that no region answers or the region a token references no
 // longer exists. For now staleness is only bounded by the max age.
 func fetchDERPMap(ctx context.Context, fetchURL, mode string, cache DERPMapCache) (*tailcfg.DERPMap, error) {
+	if cache == nil {
+		cache = defaultDERPMapCache
+	}
 	var cachedData []byte
 	var cachedETag string
-	if cache != nil {
-		if data, etag, storedAt, ok := cache.Get(fetchURL); ok {
-			if dm := decodeDERPMap(data); dm != nil {
-				if time.Since(storedAt) < derpMapCacheMaxAge {
-					return dm, nil
-				}
-				cachedData, cachedETag = data, etag
+	if data, etag, storedAt, ok := cache.Get(fetchURL); ok {
+		if dm := decodeDERPMap(data); dm != nil {
+			if time.Since(storedAt) < derpMapCacheMaxAge {
+				return dm, nil
 			}
+			cachedData, cachedETag = data, etag
 		}
 	}
 
@@ -786,9 +820,7 @@ func fetchDERPMap(ctx context.Context, fetchURL, mode string, cache DERPMapCache
 	if dm == nil {
 		return staleOr(fmt.Errorf("invalid DERP map JSON from %v", fetchURL))
 	}
-	if cache != nil {
-		cache.Put(fetchURL, body, res.Header.Get("ETag"))
-	}
+	cache.Put(fetchURL, body, res.Header.Get("ETag"))
 	return dm, nil
 }
 
@@ -816,7 +848,8 @@ func decodeDERPMap(data []byte) *tailcfg.DERPMap {
 //     of fetching one over the network.
 //   - [ExpandForServer]: mark the DERP map fetch as being on behalf
 //     of a tailcat server rather than a client.
-//   - [DERPMapCache]: cache fetched DERP maps.
+//   - [DERPMapCache]: cache fetched DERP maps (defaults to a
+//     process-wide in-memory cache).
 func (ci *ConnInfo) Expand(ctx context.Context, opts ...any) error {
 	fetchURL := DefaultDERPMapURL
 	mode := "client"

@@ -9,7 +9,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -363,5 +366,30 @@ func TestConnBlob(t *testing.T) {
 				t.Errorf("ParseConnBlob result back diff:\n%s", diff)
 			}
 		})
+	}
+}
+
+// TestFetchDERPMapMemoryCache verifies the default in-memory DERP map
+// cache: a second fetch of the same URL within the freshness window
+// makes no network request.
+func TestFetchDERPMapMemoryCache(t *testing.T) {
+	var fetches atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches.Add(1)
+		fmt.Fprint(w, `{"Regions":{"1":{"RegionID":1}}}`)
+	}))
+	defer srv.Close()
+
+	for range 2 {
+		dm, err := FetchDERPMap(context.Background(), DERPMapURL(srv.URL))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(dm.Regions) != 1 {
+			t.Fatalf("got %d regions; want 1", len(dm.Regions))
+		}
+	}
+	if n := fetches.Load(); n != 1 {
+		t.Errorf("fetches = %d; want 1", n)
 	}
 }
