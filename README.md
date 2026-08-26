@@ -70,7 +70,7 @@ $ tailcat --serve=8080,8443 # or --serve=all
 
 And then the client:
 
-```
+```sh
 $ tailcat tcXXXXXXXXX 8080
 GET / HTTP/1.1
 Host: foo
@@ -100,19 +100,19 @@ $ tailcat ssh tcXXXXXXXXX ls -la
 Ping to test connectivity:
 
 ```sh
-tailcat ping <token>
+$ tailcat ping <token>
 ```
 
 Run a command through a SOCKS5 proxy routed over the tunnel:
 
 ```sh
-tailcat socks <token> curl http://server.tailcat:8081/
+$ tailcat socks <token> curl http://server.tailcat:8081/
 ```
 
 Act as an exit node so the client can reach the server's network:
 
 ```sh
-tailcat --serve=exit-node
+$ tailcat --serve=exit-node
 ```
 
 Parse a connection token and print its contents (the server's WireGuard
@@ -202,9 +202,9 @@ a DNS name works anywhere the CLI takes a token:
 
 ```sh
 # If example.com has a TXT record "tailcat=tc..."
-tailcat example.com 8080
-tailcat ssh example.com
-tailcat ping example.com
+$ tailcat example.com 8080
+$ tailcat ssh example.com
+$ tailcat ping example.com
 ```
 
 ## How it works
