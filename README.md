@@ -285,6 +285,44 @@ instead; `--region=list` shows the choices.)
 TODO: make the client more robust here if the DERP map changes over
 time: https://github.com/tailscale/tailcat/issues/7
 
+### Bring your own DERP relay
+
+Nothing requires Tailscale's relays: [run your own DERP
+server](https://github.com/tailscale/tailscale/tree/main/cmd/derper#derp)
+(it needs a hostname with a TLS certificate, which derper can get
+itself via Let's Encrypt), then generate a server key that uses it by
+passing its hostname (or several, comma-separated) as the region:
+
+```sh
+server$ tailcat genkey --region=derp.example.com
+tcomFwWCCAIsKOqPUux6ClG2RM4A_vOq4VBzGgHGGjq9OsJuFKSWFygaFhToGhYWhwZGVycC5leGFtcGxlLmNvbQ
+
+server$ tailcat --serve=22
+```
+
+The token embeds your relay's hostname:
+
+```sh
+$ tailcat parse tcomFwWCCAIsKOqPUux6ClG2RM4A_vOq4VBzGgHGGjq9OsJuFKSWFygaFhToGhYWhwZGVycC5leGFtcGxlLmNvbQ
+{
+    "ServerPublic": "nodekey:8022c28ea8f52ec7a0a51b644ce00fef3aae150731a01c61a3abd3ac26e14a49",
+    "Region": [
+        {
+            "Nodes": [
+                {
+                    "HostName": "derp.example.com"
+                }
+            ]
+        }
+    ]
+}
+```
+
+so clients need no extra flags and never contact Tailscale's DERP map
+server or relays, and the only rate limits are yours. Alternatively,
+if you run a whole fleet of relays, serve your own DERP map JSON and
+point both sides at it with `--derpmap-url`.
+
 ### Go library
 
 A minimal server that answers any TCP port through the tunnel and
