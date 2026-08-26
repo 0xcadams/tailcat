@@ -22,7 +22,7 @@ Whether you use `tailcat` as a CLI tool or library, one side runs a `tailcat`
 server (listener) and gets back a short connection token. The other side passes
 that token to `tailcat`'s client side to connect. All traffic between the two is
 encrypted end-to-end with WireGuard. The initial connection bootstraps through
-Tailscale's DERP relay network, and then magicsock performs NAT traversal to
+a DERP server ([see below](#bring-your-own-derp-relay)), and then magicsock performs NAT traversal to
 upgrade to a direct peer-to-peer UDP connection when possible (usually!).
 
 You don't need a Tailscale account, root/admin access on the machine
