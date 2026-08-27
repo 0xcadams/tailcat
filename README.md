@@ -34,6 +34,12 @@ And it's all open source.
 You can use our free rate-limited DERP relays (the default DERP map is
 https://tailcat.dev/derpmap.json) or you can [run your own](https://github.com/tailscale/tailscale/tree/main/cmd/derper#derp).
 
+There's also an experimental in-browser web demo (tailcat compiled to
+WebAssembly) at https://tailscale.github.io/tailcat/ that can send and
+receive files or text, interoperating with the CLI. Browser traffic is
+relayed over DERP only, with no direct connections until WebRTC
+support ([#4](https://github.com/tailscale/tailcat/issues/4)).
+
 ## Install
 
 ```sh
