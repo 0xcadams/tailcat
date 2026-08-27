@@ -45,6 +45,7 @@ import (
 	"net/http"
 	"net/netip"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -1088,6 +1089,14 @@ func (b *locoBackend) onEngineStatus(st *wgengine.Status, err error) {
 // receive back. It's called whenever our endpoints change and when a
 // peer first completes the meow handshake, and is idempotent.
 func (b *locoBackend) advertiseEndpoints() {
+	if runtime.GOOS == "js" {
+		// In browsers this does nothing: js/wasm has no UDP, so
+		// peers disco-pinging whatever endpoints magicsock reports
+		// could never reach us. Direct browser connections would
+		// need WebRTC; see
+		// https://github.com/tailscale/tailcat/issues/4.
+		return
+	}
 	b.mu.Lock()
 	eps := slices.Clone(b.eps)
 	var peers []tailcfg.NodeView
