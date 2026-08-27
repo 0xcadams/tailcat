@@ -14,15 +14,23 @@
   #status { color: #555; min-height: 1.2em; }
   .hidden { display: none; }
   ul#incoming { padding-left: 1.2rem; }
+  .notice { background: #fff8e1; border: 1px solid #e0c060; border-radius: 4px; padding: 0.5rem 0.8rem; font-size: 0.9rem; }
+  textarea { width: 100%; box-sizing: border-box; font-family: ui-monospace, monospace; }
+  .recv-text { display: block; background: #f4f4f4; padding: 0.5rem; border-radius: 4px; margin: 0.5rem 0; white-space: pre-wrap; max-height: 12rem; overflow: auto; }
 </style>
 </head>
 <body>
 <h1>tailcat</h1>
+<p class="notice">This is an experimental demo of tailcat in the
+browser. Unlike the CLI, all of its traffic is relayed through DERP
+servers; browsers can't make tailcat's direct peer-to-peer
+connections without WebRTC support
+(<a href="https://github.com/tailscale/tailcat/issues/4">issue #4</a>).</p>
 <p id="status">Loading WebAssembly…</p>
 <progress id="load-progress" max="1" value="0"></progress>
 
 <section id="receive">
-  <h2>Receive a file</h2>
+  <h2>Receive</h2>
   <p>Create a listener, share its address out of band, then the other
   side sends with this page or the CLI: <code>tailcat &lt;addr&gt; &lt; file</code></p>
   <label><input type="checkbox" id="persist-key"> Reuse a persistent address (stored in this browser)</label>
@@ -36,12 +44,14 @@
 </section>
 
 <section id="send">
-  <h2>Send a file</h2>
+  <h2>Send</h2>
   <p>Paste the receiver's address. The receiver can be this page on
   another machine, or the CLI: <code>tailcat &gt; file</code></p>
   <p><input type="text" id="send-addr" size="40" placeholder="tc…"></p>
-  <p><input type="file" id="send-file"></p>
-  <p><button id="send-btn" disabled>Send</button></p>
+  <p><input type="file" id="send-file">
+  <button id="send-btn" disabled>Send file</button></p>
+  <p><textarea id="send-text" rows="4" placeholder="…or type text to send"></textarea></p>
+  <p><button id="send-text-btn" disabled>Send text</button></p>
   <p id="send-progress"></p>
 </section>
 

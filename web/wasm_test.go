@@ -397,3 +397,147 @@ func TestBrowserSends(t *testing.T) {
 	}
 	checkPageErrors(t, runCtx)
 }
+
+// TestBrowserSendsTextUI drives the send form like a user: it types
+// an address and a message into the page, clicks "Send text", and
+// verifies a Go tailcat server receives exactly that text.
+func TestBrowserSendsTextUI(t *testing.T) {
+	bin := preflight(t)
+	dm := integration.RunDERPAndSTUN(t, mkLogf(t, "derpstun"), "127.0.0.1")
+	srv := newWebServer(t, dm)
+
+	s := &tailcat.Server{Logf: mkLogf(t, "server"), Region: dm.Regions[1]}
+	t.Cleanup(func() { s.Close() })
+
+	recvc := make(chan string, 1)
+	s.OnTCP = func(port uint16) (handler func(net.Conn)) {
+		return func(c net.Conn) {
+			defer c.Close()
+			b, err := io.ReadAll(c)
+			if err != nil {
+				t.Errorf("server read: %v", err)
+			}
+			select {
+			case recvc <- string(b):
+			default:
+			}
+		}
+	}
+	if err := s.Start(); err != nil {
+		t.Fatalf("Server.Start: %v", err)
+	}
+	blob := s.ConnBlob()
+	t.Logf("Go server listening at %v", blob)
+
+	browserCtx := launchChrome(t, bin)
+	runCtx, cancelRun := context.WithTimeout(browserCtx, 120*time.Second)
+	t.Cleanup(cancelRun)
+
+	const wantText = "meow 🐱 世界\nsecond line"
+	var ready, sendDone bool
+	if err := chromedp.Run(runCtx,
+		chromedp.Navigate(srv.URL+"/"),
+		chromedp.Poll("window.tcTest && window.tcTest.ready === true", &ready,
+			chromedp.WithPollingTimeout(60*time.Second)),
+		chromedp.SetValue("#send-addr", string(blob)),
+		chromedp.SetValue("#send-text", wantText),
+		chromedp.Click("#send-text-btn"),
+		chromedp.Poll("window.tcTest.sendDone === true", &sendDone,
+			chromedp.WithPollingTimeout(90*time.Second)),
+	); err != nil {
+		t.Fatalf("chromedp run: %v", err)
+	}
+
+	select {
+	case got := <-recvc:
+		if got != wantText {
+			t.Errorf("server received %q; browser sent %q", got, wantText)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Go server never finished receiving")
+	}
+	checkPageErrors(t, runCtx)
+}
+
+// TestBrowserReceivesTextUI has the browser listen with the regular
+// interface (not the test-mode hash sink), sends it text from a Go
+// tailcat client, clicks the incoming connection's "Show as text"
+// button, and verifies the page displays the text.
+func TestBrowserReceivesTextUI(t *testing.T) {
+	bin := preflight(t)
+	dm := integration.RunDERPAndSTUN(t, mkLogf(t, "derpstun"), "127.0.0.1")
+	srv := newWebServer(t, dm)
+
+	browserCtx := launchChrome(t, bin)
+	runCtx, cancelRun := context.WithTimeout(browserCtx, 120*time.Second)
+	t.Cleanup(cancelRun)
+
+	var gotAddr bool
+	var addr string
+	if err := chromedp.Run(runCtx,
+		chromedp.Navigate(srv.URL+"/?mode=listen"),
+		chromedp.Poll("window.tcTest && window.tcTest.listenAddr !== null", &gotAddr,
+			chromedp.WithPollingTimeout(90*time.Second)),
+		chromedp.Evaluate("window.tcTest.listenAddr", &addr),
+	); err != nil {
+		t.Fatalf("chromedp run: %v", err)
+	}
+	if !gotAddr || !strings.HasPrefix(addr, "tc") {
+		t.Fatalf("browser listener never produced an address (gotAddr=%v addr=%q)", gotAddr, addr)
+	}
+	t.Logf("browser listening at %v", addr)
+
+	cl := &tailcat.Client{
+		Server:     tailcat.ConnBlob(addr),
+		Logf:       mkLogf(t, "client"),
+		DERPMapURL: srv.URL + "/derpmap.json",
+	}
+	t.Cleanup(func() { cl.Close() })
+
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancel()
+	for {
+		pctx, pcancel := context.WithTimeout(ctx, 5*time.Second)
+		_, err := cl.Ping(pctx)
+		pcancel()
+		if err == nil {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("Ping never succeeded: %v", err)
+		}
+	}
+
+	const wantText = "purr 🐈\nover DERP"
+	conn, err := cl.DialTCPPort(ctx, 1)
+	if err != nil {
+		t.Fatalf("DialTCPPort: %v", err)
+	}
+	if _, err := conn.Write([]byte(wantText)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := conn.(interface{ CloseWrite() error }).CloseWrite(); err != nil {
+		t.Fatalf("CloseWrite: %v", err)
+	}
+
+	var shown bool
+	var gotText string
+	if err := chromedp.Run(runCtx,
+		chromedp.WaitVisible(`//button[text()="Show as text"]`),
+		chromedp.Click(`//button[text()="Show as text"]`),
+		chromedp.Poll(`document.querySelector("#incoming .recv-text") !== null`, &shown,
+			chromedp.WithPollingTimeout(60*time.Second)),
+		chromedp.Evaluate(`document.querySelector("#incoming .recv-text").textContent`, &gotText),
+	); err != nil {
+		t.Fatalf("chromedp run: %v", err)
+	}
+	if gotText != wantText {
+		t.Errorf("page shows %q; client sent %q", gotText, wantText)
+	}
+
+	// The browser's close after draining confirms delivery.
+	if _, err := io.Copy(io.Discard, conn); err != nil {
+		t.Fatalf("reading to EOF: %v", err)
+	}
+	checkPageErrors(t, runCtx)
+}
