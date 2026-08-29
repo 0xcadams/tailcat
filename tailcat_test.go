@@ -35,7 +35,7 @@ func (e *testTCPWaiter) State() uint32 { return uint32(e.state) }
 func (e *testTCPWaiter) Wait()         { e.waited = true }
 
 func TestWaitTCPEndpoint(t *testing.T) {
-	for _, state := range []tcp.EndpointState{tcp.StateClose, tcp.StateError, tcp.StateTimeWait} {
+	for _, state := range []tcp.EndpointState{tcp.StateClose, tcp.StateError, tcp.StateFinWait2, tcp.StateTimeWait} {
 		endpoint := &testTCPWaiter{state: state}
 		if err := waitTCPEndpoint(context.Background(), endpoint); err != nil {
 			t.Errorf("state %s: %v", state, err)

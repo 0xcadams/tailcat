@@ -578,7 +578,8 @@ type tcpWaiter interface {
 
 func waitTCPEndpoint(ctx context.Context, ep tcpWaiter) error {
 	state := tcp.EndpointState(ep.State())
-	if state == tcp.StateClose || state == tcp.StateError || state == tcp.StateTimeWait {
+	// FIN-WAIT2 means the peer acknowledged all sent data and the final FIN.
+	if state == tcp.StateClose || state == tcp.StateError || state == tcp.StateFinWait2 || state == tcp.StateTimeWait {
 		return nil
 	}
 	done := make(chan struct{})
