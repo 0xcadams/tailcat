@@ -354,6 +354,10 @@ type Server struct {
 // ephemeral key, log.Printf for logging, and the nearest region of
 // the default DERP map.
 func (s *Server) Start() error {
+	return s.start((*locoBackend).Start)
+}
+
+func (s *Server) start(startBackend func(*locoBackend) error) error {
 	if s.lb != nil {
 		return errors.New("tailcat: Server.Start called twice")
 	}
@@ -479,7 +483,7 @@ func (s *Server) Start() error {
 
 	s.lb = lb
 	sys.Engine.Get().SetFilter(s.buildFilter())
-	return lb.Start()
+	return startBackend(lb)
 }
 
 var allTCPPorts = filter.PortRange{First: 0, Last: 65535}

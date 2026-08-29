@@ -303,6 +303,19 @@ func TestClientStartCleansUpAfterRegionResolutionFailure(t *testing.T) {
 	}
 }
 
+func TestServerStartCleansUpAfterBackendFailure(t *testing.T) {
+	wantErr := errors.New("injected backend start failure")
+	s := &Server{Logf: logger.Discard, Region: &tailcfg.DERPRegion{RegionID: 1}}
+	t.Cleanup(func() { s.Close() })
+
+	if err := s.start(func(*locoBackend) error { return wantErr }); !errors.Is(err, wantErr) {
+		t.Fatalf("Start error = %v; want %v", err, wantErr)
+	}
+	if s.lb != nil {
+		t.Fatal("failed server start left a backend allocated")
+	}
+}
+
 func TestConnBlob(t *testing.T) {
 	akey := func(a [32]byte) NodePublic {
 		return NodePublic{key.NodePublicFromRaw32(mem.B(a[:]))}
