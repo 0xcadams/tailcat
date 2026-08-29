@@ -18,12 +18,33 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"go4.org/mem"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest/integration"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine/filter"
 )
+
+type testTCPWaiter struct {
+	state  tcp.EndpointState
+	waited bool
+}
+
+func (e *testTCPWaiter) State() uint32 { return uint32(e.state) }
+func (e *testTCPWaiter) Wait()         { e.waited = true }
+
+func TestWaitTCPEndpoint(t *testing.T) {
+	for _, state := range []tcp.EndpointState{tcp.StateClose, tcp.StateError, tcp.StateTimeWait} {
+		endpoint := &testTCPWaiter{state: state}
+		if err := waitTCPEndpoint(context.Background(), endpoint); err != nil {
+			t.Errorf("state %s: %v", state, err)
+		}
+		if endpoint.waited {
+			t.Errorf("state %s waited", state)
+		}
+	}
+}
 
 func mkLogger(t testing.TB, name string) logger.Logf {
 	return func(format string, args ...any) {
