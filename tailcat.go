@@ -1589,6 +1589,11 @@ func (c *Client) ensureStarted(ctx context.Context) error {
 	if err := c.initLocked(); err != nil {
 		return err
 	}
+	fail := func(err error) error {
+		c.lb.Close()
+		c.lb = nil
+		return err
+	}
 	var opts []any
 	if c.DERPMapURL != "" {
 		opts = append(opts, DERPMapURL(c.DERPMapURL))
@@ -1597,16 +1602,16 @@ func (c *Client) ensureStarted(ctx context.Context) error {
 		opts = append(opts, c.DERPMapCache)
 	}
 	if err := c.ci.Expand(ctx, opts...); err != nil {
-		return err
+		return fail(err)
 	}
 	if len(c.ci.Region) == 0 {
-		return errors.New("no DERP regions in ConnBlob")
+		return fail(errors.New("no DERP regions in ConnBlob"))
 	}
 	for _, r := range c.ci.Region {
 		mak.Set(&c.lb.dm.Regions, r.RegionID, r)
 	}
 	if err := c.lb.Start(); err != nil {
-		return err
+		return fail(err)
 	}
 	c.started = true
 	return nil
