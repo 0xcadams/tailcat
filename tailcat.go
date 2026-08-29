@@ -232,6 +232,7 @@ type locoBackend struct {
 	nm             *netmap.NetworkMap
 	allowedClients map[key.NodePublic]bool // or nil map for all
 	eps            []netip.AddrPort        // our current local UDP endpoints, sorted
+	closeOnce      sync.Once
 }
 
 func (b *locoBackend) derpRegionID() int {
@@ -245,12 +246,23 @@ func (b *locoBackend) derpRegionID() int {
 }
 
 func (b *locoBackend) Close() error {
-	if e, ok := b.sys.Engine.GetOK(); ok {
-		e.Close()
-	}
-	if m, ok := b.sys.NetMon.GetOK(); ok {
-		m.Close()
-	}
+	b.closeOnce.Do(func() {
+		if b.ns != nil {
+			b.ns.Close()
+		}
+		if e, ok := b.sys.Engine.GetOK(); ok {
+			e.Close()
+		}
+		if m, ok := b.sys.NetMon.GetOK(); ok {
+			m.Close()
+		}
+		if d, ok := b.sys.Dialer.GetOK(); ok {
+			d.Close()
+		}
+		if bus, ok := b.sys.Bus.GetOK(); ok {
+			bus.Close()
+		}
+	})
 	return nil
 }
 
