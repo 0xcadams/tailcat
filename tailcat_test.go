@@ -281,6 +281,28 @@ func TestServerCloseClosesActiveConnections(t *testing.T) {
 	}
 }
 
+func TestClientStartCleansUpAfterRegionResolutionFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"Regions":{}}`)
+	}))
+	defer srv.Close()
+
+	serverKey := key.NewNode()
+	server := (&ConnInfo{
+		ServerPublic: NodePublic{serverKey.Public()},
+		RegionID:     1,
+	}).ConnBlob()
+	c := &Client{Server: server, DERPMapURL: srv.URL, Logf: logger.Discard}
+	t.Cleanup(func() { c.Close() })
+
+	if _, err := c.Ping(context.Background()); err == nil {
+		t.Fatal("Ping unexpectedly succeeded")
+	}
+	if c.lb != nil {
+		t.Fatal("failed client start left a backend allocated")
+	}
+}
+
 func TestConnBlob(t *testing.T) {
 	akey := func(a [32]byte) NodePublic {
 		return NodePublic{key.NodePublicFromRaw32(mem.B(a[:]))}
