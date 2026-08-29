@@ -357,7 +357,7 @@ func (s *Server) Start() error {
 	return s.start((*locoBackend).Start)
 }
 
-func (s *Server) start(startBackend func(*locoBackend) error) error {
+func (s *Server) start(startBackend func(*locoBackend) error) (retErr error) {
 	if s.lb != nil {
 		return errors.New("tailcat: Server.Start called twice")
 	}
@@ -389,6 +389,12 @@ func (s *Server) start(startBackend func(*locoBackend) error) error {
 	}
 
 	lb := newLocoBackend(priv)
+	defer func() {
+		if retErr != nil {
+			lb.Close()
+			s.lb = nil
+		}
+	}()
 	lb.logf = logf
 	lb.dm = &tailcfg.DERPMap{}
 	mak.Set(&lb.dm.Regions, reg.RegionID, reg)
