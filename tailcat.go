@@ -1466,7 +1466,7 @@ func (c *Client) initLocked() error {
 	return c.initLockedWith(nil)
 }
 
-func (c *Client) initLockedWith(beforePublish func(*locoBackend) error) error {
+func (c *Client) initLockedWith(beforePublish func(*locoBackend) error) (retErr error) {
 	if c.lb != nil {
 		return nil
 	}
@@ -1480,6 +1480,11 @@ func (c *Client) initLockedWith(beforePublish func(*locoBackend) error) error {
 	}
 
 	lb := newLocoBackend(c.nodeKeyLocked())
+	defer func() {
+		if retErr != nil {
+			lb.Close()
+		}
+	}()
 	lb.logf = logf
 	lb.dm = &tailcfg.DERPMap{}
 	lb.serverPub = ci.ServerPublic.NodePublic
