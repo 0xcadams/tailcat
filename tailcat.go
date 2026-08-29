@@ -1463,6 +1463,10 @@ func NewClient(server ConnBlob) *Client {
 // does no network access; that happens in ensureStarted, its caller.
 // c.startMu must be held.
 func (c *Client) initLocked() error {
+	return c.initLockedWith(nil)
+}
+
+func (c *Client) initLockedWith(beforePublish func(*locoBackend) error) error {
 	if c.lb != nil {
 		return nil
 	}
@@ -1551,6 +1555,11 @@ func (c *Client) initLocked() error {
 		panic("unreachable from tailcat") // but required by Dialer currently
 	}
 	sys.Tun.Get().Start()
+	if beforePublish != nil {
+		if err := beforePublish(lb); err != nil {
+			return err
+		}
+	}
 
 	c.ci = ci
 	c.lb = lb

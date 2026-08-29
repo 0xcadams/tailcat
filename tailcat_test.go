@@ -316,6 +316,30 @@ func TestServerStartCleansUpAfterBackendFailure(t *testing.T) {
 	}
 }
 
+func TestClientInitCleansUpAfterFailure(t *testing.T) {
+	wantErr := errors.New("injected client init failure")
+	server := (&ConnInfo{ServerPublic: NodePublic{key.NewNode().Public()}}).ConnBlob()
+	c := &Client{Server: server, Logf: logger.Discard}
+	var lb *locoBackend
+
+	err := c.initLockedWith(func(got *locoBackend) error {
+		lb = got
+		return wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("init error = %v; want %v", err, wantErr)
+	}
+	if lb == nil {
+		t.Fatal("init hook was not called")
+	}
+	defer lb.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := lb.sys.Dialer.Get().SystemDial(ctx, "tcp", "127.0.0.1:1"); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("dial after failed init = %v; want net.ErrClosed", err)
+	}
+}
+
 func TestConnBlob(t *testing.T) {
 	akey := func(a [32]byte) NodePublic {
 		return NodePublic{key.NodePublicFromRaw32(mem.B(a[:]))}
